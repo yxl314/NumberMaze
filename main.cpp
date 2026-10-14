@@ -1,6 +1,6 @@
 #include <QApplication>
 
-#include "gamewindow.h"
+#include "MainWindow.h"
 
 int main(int argc, char *argv[])
 {
@@ -10,7 +10,7 @@ int main(int argc, char *argv[])
     QApplication::setOrganizationName(QStringLiteral("NumberMaze"));
     QApplication::setApplicationVersion(QStringLiteral("1.0"));
 
-    GameWindow window;
+    mvc::MainWindow window;
     window.show();
 
     return app.exec();

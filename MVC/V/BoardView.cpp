@@ -1,0 +1,254 @@
+#include "BoardView.h"
+
+#include <QFontMetrics>
+#include <QMouseEvent>
+#include <QPainter>
+
+namespace mvc {
+
+namespace {
+
+// 配色：沿用原始 demo 的深色风格
+const QColor kBoardColor(40, 44, 52);
+const QColor kEdgeColor(96, 104, 118);
+const QColor kEdgeHotColor(152, 162, 180);
+const QColor kTileColor(70, 130, 220);
+const QColor kTileHoverColor(120, 176, 255);
+const QColor kTileMovableColor(58, 176, 122);
+const QColor kTileTextColor(255, 255, 255);
+const QColor kBlankColor(130, 136, 148);
+const QColor kSolvedColor(255, 214, 102);
+
+} // namespace
+
+BoardView::BoardView(GameModel *model, QWidget *parent)
+    : QWidget(parent)
+    , m_model(model)
+{
+    setMouseTracking(true);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    setMinimumSize(minimumSizeHint());
+}
+
+QSize BoardView::sizeHint() const
+{
+    return QSize(560, 560);
+}
+
+QSize BoardView::minimumSizeHint() const
+{
+    return QSize(320, 320);
+}
+
+// ---------- 几何计算 ----------
+
+QRectF BoardView::boardRect() const
+{
+    // 以正方形居中绘制，四周按比例留白
+    const qreal side = qMin(width(), height());
+    const qreal margin = side * 0.045;
+    return QRectF((width() - side) / 2.0 + margin,
+                  (height() - side) / 2.0 + margin,
+                  side - 2 * margin,
+                  side - 2 * margin);
+}
+
+QPointF BoardView::centerOf(int index) const
+{
+    const QRectF board = boardRect();
+    const qreal cell = qMin(board.width(), board.height()) / core::kBoardSize;
+    const int row = core::Graph::rowOf(index);
+    const int col = core::Graph::colOf(index);
+    return QPointF(board.left() + (col + 0.5) * cell,
+                   board.top() + (row + 0.5) * cell);
+}
+
+qreal BoardView::circleRadius() const
+{
+    const QRectF board = boardRect();
+    return qMin(board.width(), board.height()) / core::kBoardSize * 0.38;
+}
+
+int BoardView::nodeAt(const QPoint &pos) const
+{
+    const qreal r = circleRadius();
+    const QPointF p(pos);
+    for (int i = 0; i < core::kNodeCount; ++i) {
+        const QPointF d = centerOf(i) - p;
+        if (d.x() * d.x() + d.y() * d.y() <= r * r)
+            return i;
+    }
+    return -1;
+}
+
+// ---------- 绘制 ----------
+
+void BoardView::paintEvent(QPaintEvent *)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setRenderHint(QPainter::TextAntialiasing, true);
+
+    const qreal radius = circleRadius();
+
+    drawBackground(p);
+    drawConnections(p, radius);
+
+    const int blank = m_model->blankIndex();
+    drawBlankMarker(p, blank, radius);
+    drawTiles(p, radius);
+
+    if (m_model->isSolved())
+        drawSolvedOverlay(p);
+}
+
+void BoardView::drawBackground(QPainter &p) const
+{
+    const QRectF board = boardRect();
+    const qreal corner = board.width() * 0.032;
+
+    p.setPen(Qt::NoPen);
+    p.setBrush(kBoardColor);
+    p.drawRoundedRect(QRectF(rect()).adjusted(2, 2, -2, -2), corner, corner);
+}
+
+void BoardView::drawConnections(QPainter &p, qreal radius) const
+{
+    // 连线为强制显示：本项目的拓扑含对角线连接，
+    // 不画出连线玩家无从判断哪些节点可以移动。
+    const core::Graph &g = m_model->graph();
+    const qreal width = qMax(1.5, radius * 0.115);
+
+    for (int i = 0; i < core::kNodeCount; ++i) {
+        for (int j : g.neighbors(i)) {
+            if (j <= i)
+                continue;
+
+            // 与悬停节点相关的连线加亮，帮助确认可移动性
+            const bool hot = (i == m_hover || j == m_hover);
+            p.setPen(QPen(hot ? kEdgeHotColor : kEdgeColor,
+                          width, Qt::SolidLine, Qt::RoundCap));
+            p.drawLine(centerOf(i), centerOf(j));
+        }
+    }
+}
+
+void BoardView::drawBlankMarker(QPainter &p, int blank, qreal radius) const
+{
+    if (blank < 0)
+        return;
+
+    p.setPen(QPen(kBlankColor, qMax(1.5, radius * 0.10), Qt::DashLine));
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(centerOf(blank), radius, radius);
+}
+
+void BoardView::drawTiles(QPainter &p, qreal radius) const
+{
+    // 字号随圆半径缩放，保证窗口缩放后数字仍清晰
+    QFont f = font();
+    f.setBold(true);
+    f.setPixelSize(qMax(10, int(radius * 1.05)));
+    p.setFont(f);
+
+    const int blank = m_model->blankIndex();
+
+    for (int i = 0; i < core::kNodeCount; ++i) {
+        const int value = m_model->valueAt(i);
+        if (value == 0)
+            continue;
+
+        const QPointF c = centerOf(i);
+
+        // 可移动高亮为强制显示，是玩法必需的信息
+        const bool movable = m_model->isMovable(i) && i != blank;
+
+        QColor fill = kTileColor;
+        if (i == m_hover && movable)
+            fill = kTileHoverColor;
+        else if (movable)
+            fill = kTileMovableColor;
+
+        // 轻微阴影，增加立体感
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0, 0, 0, 60));
+        p.drawEllipse(c + QPointF(0, radius * 0.06), radius, radius);
+
+        p.setBrush(fill);
+        p.setPen(QPen(fill.darker(150), qMax(1.0, radius * 0.09)));
+        p.drawEllipse(c, radius, radius);
+
+        // 数字：按文本实际宽度收缩，避免两位数贴边
+        const QString text = QString::number(value);
+        QFontMetrics fm(f);
+        const qreal maxWidth = radius * 1.44;
+        if (fm.horizontalAdvance(text) > maxWidth) {
+            QFont small = f;
+            small.setPixelSize(qMax(8, int(f.pixelSize() * maxWidth
+                                           / fm.horizontalAdvance(text))));
+            p.setFont(small);
+        }
+
+        p.setPen(kTileTextColor);
+        p.drawText(QRectF(c.x() - radius, c.y() - radius, 2 * radius, 2 * radius),
+                   Qt::AlignCenter, text);
+        p.setFont(f);
+    }
+}
+
+void BoardView::drawSolvedOverlay(QPainter &p) const
+{
+    const QRectF board = boardRect();
+    const qreal corner = board.width() * 0.03;
+
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(0, 0, 0, 130));
+    p.drawRoundedRect(board, corner, corner);
+
+    QFont f = font();
+    f.setBold(true);
+    f.setPixelSize(qMax(16, int(board.width() * 0.085)));
+    p.setFont(f);
+    p.setPen(kSolvedColor);
+    p.drawText(board, Qt::AlignCenter,
+               QStringLiteral("完成！\n共 %1 步").arg(m_model->moveCount()));
+}
+
+// ---------- 交互 ----------
+
+void BoardView::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() != Qt::LeftButton) {
+        QWidget::mousePressEvent(event);
+        return;
+    }
+
+    const int idx = nodeAt(event->pos());
+    if (idx >= 0)
+        emit nodeClicked(idx);
+}
+
+void BoardView::mouseMoveEvent(QMouseEvent *event)
+{
+    const int idx = nodeAt(event->pos());
+    if (idx == m_hover)
+        return;
+
+    m_hover = idx;
+
+    const bool clickable = m_model->isMovable(idx) && !m_model->isSolved();
+    setCursor(clickable ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    update();
+}
+
+void BoardView::leaveEvent(QEvent *)
+{
+    if (m_hover == -1)
+        return;
+
+    m_hover = -1;
+    setCursor(Qt::ArrowCursor);
+    update();
+}
+
+} // namespace mvc
