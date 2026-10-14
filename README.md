@@ -27,41 +27,75 @@
 
 ## 架构
 
-分层设计，依赖方向单向向下：
+严格 MVC 分层，依赖方向单向向下，**View 与 Model 互不相识**：
 
 ```
-        main.cpp
-            │
-    ┌───────┴────────┐
-    │  MVC/C  控制器  │  MainWindow：编排界面、转发交互
-    ├────────────────┤
-    │  MVC/M  模型    │  GameModel：包装 Core，发信号，计时与成绩
-    ├────────────────┤
-    │  MVC/V  视图    │  BoardView：只负责绘制与上报鼠标
-    └───────┬────────┘
-            │
-    ┌───────┴────────┐
-    │  Core  游戏核心 │  Graph / GameState / Difficulty
-    │  纯 C++，无 Qt  │
-    └────────────────┘
+                     MainWindow            （组合根）
+                          │
+              ┌───────────┴───────────┐
+              │  实例化 V / M / C      │
+              │  搭建菜单与状态栏       │
+              └───────────┬───────────┘
+                          │ 注入
+              ┌───────────▼───────────┐
+              │      Controller       │  C 层：唯一的连接器
+              └──┬─────────────────┬──┘
+     信号(nodeClicked)          信号(boardChanged 等)
+                 │                 │
+    ┌────────────▼───┐        ┌────▼────────────┐
+    │   BoardView    │        │    GameModel     │
+    │   V 层：绘制    │        │  M 层：数据+逻辑  │
+    │   只发信号      │        │  调用后端        │
+    └────────────────┘        └────┬────────────┘
+                                   │ 委托规则
+                          ┌────────▼────────┐
+                          │      Core       │
+                          │  纯 C++，无 Qt   │
+                          └─────────────────┘
 ```
 
-**Core 是纯 C++**，不包含任何 Qt 头文件。这一点由构建系统强制保证：
-`number-maze-core` 是一个独立的静态库，只链接 C++ 标准库，不链接任何
-Qt 目标。一旦有人在 Core 里写 Qt 代码，编译就会失败。
+数据流：
+
+1. 用户点击 → View 发出 `nodeClicked(index)` 信号
+2. Controller 接到信号，调用 Model 的 `requestMove(index)`
+3. Model 委托 `core::GameState` 执行移动，然后广播 `boardChanged()`
+4. Controller 接到广播，调用 `model->boardData()` 等取出数据，
+   通过 `view->setBoard()` / `setMovable()` 喂给 View
+5. View 用新数据重绘
+
+**约束（由代码结构保证，已逐条核验）**：
+
+| 约束 | 核验方式 |
+|---|---|
+| V 层不持有 M 层指针，也不 include 其头文件 | `grep -c GameModel MVC/V/*` 结果为 0 |
+| M 层不持有 V 层指针，也不 include 其头文件 | `grep -c BoardView MVC/M/*` 结果为 0 |
+| V 与 M 之间的一切通信都经过 C 层 | Controller 是唯一同时持有两者引用的类 |
+| Core 不含任何 Qt 类型 | `number-maze-core` 静态库不链接 Qt 目标 |
+
+View 的绘制数据全部由外部通过槽函数喂入（`setBoard` / `setConnections`
+/ `setMovable` / `setSolved`），它自己不主动去任何地方取数据。
+
+### Core 是纯 C++，这一点由构建系统强制
+
+`number-maze-core` 是一个独立静态库，只链接 C++ 标准库，不链接任何
+Qt 目标。若有人在 Core 里引入 Qt 类型，编译会直接失败。
+
+已用 `nm` 核验：Core 目标文件的未定义符号中只有 `libstdc++`
+（`std::random_device`、`operator new` 等），**无任何 Qt 符号**。
 
 ```
 number-maze/
 ├── CMakeLists.txt
 ├── main.cpp                    程序入口
+├── MainWindow.h/.cpp           组合根：实例化 V/M/C，搭建外壳
 ├── Core/                       游戏核心（纯 C++）
 │   ├── Difficulty.h            难度定义
-│   ├── Graph.h/.cpp            图拓扑（22 条边）
+│   ├── Graph.h/.cpp            图拓扑（22 条边，含对角连接）
 │   └── GameState.h/.cpp        棋盘状态与规则
 ├── MVC/
-│   ├── M/GameModel.h/.cpp      模型：状态、计时、成绩
-│   ├── V/BoardView.h/.cpp      视图：绘制与鼠标
-│   └── C/MainWindow.h/.cpp     控制器：界面编排
+│   ├── M/GameModel.h/.cpp      模型：数据、计时、成绩、调用 Core
+│   ├── V/BoardView.h/.cpp      视图：绘制与信号
+│   └── C/Controller.h/.cpp     控制器：连接 V 与 M
 ├── tests/core_test.cpp         Core 自测（不依赖 Qt）
 └── scripts/
     ├── screenshot.sh           渲染验证
@@ -73,9 +107,10 @@ number-maze/
 | 层 | 负责 | 不负责 |
 |---|---|---|
 | Core | 游戏规则：移动合法性、打乱、撤销、胜利判定 | 任何界面、任何 Qt 类型 |
-| Model | 持有状态、发信号、计时、成绩持久化 | 绘制、控件操作 |
-| View | 绘制棋盘、上报点击坐标 | 判断能否移动、改状态 |
-| Controller | 连接 M 与 V、菜单、状态栏文字 | 游戏规则、绘制 |
+| Model | 持有状态、广播信号、计时、成绩持久化 | 绘制、控件操作、持有 View |
+| View | 绘制棋盘、发出点击信号 | 判断能否移动、改状态、持有 Model |
+| Controller | 连接 V 与 M、搬运数据、刷新菜单与状态栏 | 游戏规则、绘制 |
+| MainWindow | 实例化 V/M/C、搭建菜单与状态栏 | 信号转接、游戏逻辑 |
 
 ## 构建
 

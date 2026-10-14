@@ -33,6 +33,44 @@ int GameModel::bestRecord(core::Difficulty level) const
     return m_settings.value(recordKey(level), 0).toInt();
 }
 
+// ---------- 供控制器搬运给 View 的数据 ----------
+
+QVector<int> GameModel::boardData() const
+{
+    const std::vector<int> raw = m_state.board();
+    QVector<int> out;
+    out.reserve(static_cast<int>(raw.size()));
+    for (int v : raw)
+        out.append(v);
+    return out;
+}
+
+QVector<QVector<int>> GameModel::connectionData() const
+{
+    const core::Graph &g = m_state.graph();
+    QVector<QVector<int>> out;
+    out.reserve(core::kNodeCount);
+    for (int i = 0; i < core::kNodeCount; ++i) {
+        QVector<int> nbrs;
+        nbrs.reserve(static_cast<int>(g.degree(i)));
+        for (int nb : g.neighbors(i))
+            nbrs.append(nb);
+        out.append(nbrs);
+    }
+    return out;
+}
+
+QVector<bool> GameModel::movableData() const
+{
+    QVector<bool> out;
+    out.reserve(core::kNodeCount);
+    for (int i = 0; i < core::kNodeCount; ++i)
+        out.append(m_state.isMovable(i));
+    return out;
+}
+
+// ---------- 操作 ----------
+
 void GameModel::startNewGame(core::Difficulty level)
 {
     m_difficulty = level;
@@ -46,11 +84,13 @@ void GameModel::startNewGame(core::Difficulty level)
     emit statusChanged();
 }
 
+void GameModel::startNewGame()
+{
+    startNewGame(m_difficulty);
+}
+
 void GameModel::restartCurrentGame()
 {
-    // 重开本局：回到本轮开始时的局面，而非直接回到已解状态。
-    // 这里用重新打乱的方式实现——虽然局面与上一次不同，
-    // 但保证了"重开"语义（回到未解状态、步数与计时清零）。
     m_elapsedSeconds = 0;
     m_solvedNotified = false;
     stopTimer();
@@ -61,7 +101,7 @@ void GameModel::restartCurrentGame()
     emit statusChanged();
 }
 
-void GameModel::tryMoveAt(int index)
+void GameModel::requestMove(int index)
 {
     if (m_solvedNotified)
         return;
@@ -69,7 +109,6 @@ void GameModel::tryMoveAt(int index)
         return;
 
     startTimer();
-
     emit boardChanged();
 
     if (m_state.isSolved()) {
@@ -79,8 +118,8 @@ void GameModel::tryMoveAt(int index)
         const int moves = m_state.moveCount();
         const int seconds = m_elapsedSeconds;
 
-        const int previousBest = bestRecord(m_difficulty);
-        const bool isNewRecord = (previousBest <= 0 || moves < previousBest);
+        const int previous = bestRecord(m_difficulty);
+        const bool isNewRecord = (previous <= 0 || moves < previous);
         if (isNewRecord)
             saveBestRecord(m_difficulty, moves);
 
@@ -92,17 +131,19 @@ void GameModel::tryMoveAt(int index)
     emit statusChanged();
 }
 
-void GameModel::undo()
+void GameModel::requestUndo()
 {
     if (!m_state.undo())
         return;
 
-    // 撤销使局面回到未解状态，允许再次通关判定
+    // 撤销后局面不再处于通关状态，允许再次判定
     m_solvedNotified = false;
 
     emit boardChanged();
     emit statusChanged();
 }
+
+// ---------- 计时 ----------
 
 void GameModel::startTimer()
 {

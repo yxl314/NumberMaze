@@ -21,9 +21,8 @@ const QColor kSolvedColor(255, 214, 102);
 
 } // namespace
 
-BoardView::BoardView(GameModel *model, QWidget *parent)
+BoardView::BoardView(QWidget *parent)
     : QWidget(parent)
-    , m_model(model)
 {
     setMouseTracking(true);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -40,11 +39,55 @@ QSize BoardView::minimumSizeHint() const
     return QSize(320, 320);
 }
 
+// ---------- 由控制器喂入的数据 ----------
+
+void BoardView::setBoard(const QVector<int> &board)
+{
+    m_board = board;
+
+    // 依据节点总数推断方阵边长，使 View 不依赖 Core 的常量
+    const int total = m_board.size();
+    int side = 1;
+    while (side * side < total)
+        ++side;
+    m_boardSize = side;
+
+    if (m_movable.size() != total)
+        m_movable = QVector<bool>(total, false);
+
+    update();
+}
+
+void BoardView::setConnections(const QVector<QVector<int>> &adjacency)
+{
+    m_adjacency = adjacency;
+    update();
+}
+
+void BoardView::setMovable(const QVector<bool> &movable)
+{
+    m_movable = movable;
+    update();
+}
+
+void BoardView::setSolved(bool solved, int moves)
+{
+    if (m_solved == solved && m_solvedMoves == moves)
+        return;
+
+    m_solved = solved;
+    m_solvedMoves = moves;
+
+    if (m_solved)
+        setCursor(Qt::ArrowCursor);
+
+    update();
+}
+
 // ---------- 几何计算 ----------
 
 QRectF BoardView::boardRect() const
 {
-    // 以正方形居中绘制，四周按比例留白
     const qreal side = qMin(width(), height());
     const qreal margin = side * 0.045;
     return QRectF((width() - side) / 2.0 + margin,
@@ -53,12 +96,17 @@ QRectF BoardView::boardRect() const
                   side - 2 * margin);
 }
 
+int BoardView::indexAt(int row, int col) const
+{
+    return row * m_boardSize + col;
+}
+
 QPointF BoardView::centerOf(int index) const
 {
     const QRectF board = boardRect();
-    const qreal cell = qMin(board.width(), board.height()) / core::kBoardSize;
-    const int row = core::Graph::rowOf(index);
-    const int col = core::Graph::colOf(index);
+    const qreal cell = qMin(board.width(), board.height()) / m_boardSize;
+    const int row = index / m_boardSize;
+    const int col = index % m_boardSize;
     return QPointF(board.left() + (col + 0.5) * cell,
                    board.top() + (row + 0.5) * cell);
 }
@@ -66,14 +114,14 @@ QPointF BoardView::centerOf(int index) const
 qreal BoardView::circleRadius() const
 {
     const QRectF board = boardRect();
-    return qMin(board.width(), board.height()) / core::kBoardSize * 0.38;
+    return qMin(board.width(), board.height()) / m_boardSize * 0.38;
 }
 
 int BoardView::nodeAt(const QPoint &pos) const
 {
     const qreal r = circleRadius();
     const QPointF p(pos);
-    for (int i = 0; i < core::kNodeCount; ++i) {
+    for (int i = 0; i < nodeCount(); ++i) {
         const QPointF d = centerOf(i) - p;
         if (d.x() * d.x() + d.y() * d.y() <= r * r)
             return i;
@@ -93,12 +141,10 @@ void BoardView::paintEvent(QPaintEvent *)
 
     drawBackground(p);
     drawConnections(p, radius);
-
-    const int blank = m_model->blankIndex();
-    drawBlankMarker(p, blank, radius);
+    drawBlankMarker(p, radius);
     drawTiles(p, radius);
 
-    if (m_model->isSolved())
+    if (m_solved)
         drawSolvedOverlay(p);
 }
 
@@ -114,17 +160,15 @@ void BoardView::drawBackground(QPainter &p) const
 
 void BoardView::drawConnections(QPainter &p, qreal radius) const
 {
-    // 连线为强制显示：本项目的拓扑含对角线连接，
+    // 连线强制显示：本项目的拓扑含对角线连接，
     // 不画出连线玩家无从判断哪些节点可以移动。
-    const core::Graph &g = m_model->graph();
     const qreal width = qMax(1.5, radius * 0.115);
 
-    for (int i = 0; i < core::kNodeCount; ++i) {
-        for (int j : g.neighbors(i)) {
-            if (j <= i)
+    for (int i = 0; i < m_adjacency.size(); ++i) {
+        for (int j : m_adjacency.at(i)) {
+            if (j <= i || j >= nodeCount())
                 continue;
 
-            // 与悬停节点相关的连线加亮，帮助确认可移动性
             const bool hot = (i == m_hover || j == m_hover);
             p.setPen(QPen(hot ? kEdgeHotColor : kEdgeColor,
                           width, Qt::SolidLine, Qt::RoundCap));
@@ -133,8 +177,16 @@ void BoardView::drawConnections(QPainter &p, qreal radius) const
     }
 }
 
-void BoardView::drawBlankMarker(QPainter &p, int blank, qreal radius) const
+void BoardView::drawBlankMarker(QPainter &p, qreal radius) const
 {
+    // 空格位置由局面数据推出，View 不需要向外部询问
+    int blank = -1;
+    for (int i = 0; i < nodeCount(); ++i) {
+        if (m_board.at(i) == 0) {
+            blank = i;
+            break;
+        }
+    }
     if (blank < 0)
         return;
 
@@ -145,23 +197,18 @@ void BoardView::drawBlankMarker(QPainter &p, int blank, qreal radius) const
 
 void BoardView::drawTiles(QPainter &p, qreal radius) const
 {
-    // 字号随圆半径缩放，保证窗口缩放后数字仍清晰
     QFont f = font();
     f.setBold(true);
     f.setPixelSize(qMax(10, int(radius * 1.05)));
     p.setFont(f);
 
-    const int blank = m_model->blankIndex();
-
-    for (int i = 0; i < core::kNodeCount; ++i) {
-        const int value = m_model->valueAt(i);
+    for (int i = 0; i < nodeCount(); ++i) {
+        const int value = m_board.at(i);
         if (value == 0)
             continue;
 
         const QPointF c = centerOf(i);
-
-        // 可移动高亮为强制显示，是玩法必需的信息
-        const bool movable = m_model->isMovable(i) && i != blank;
+        const bool movable = (i < m_movable.size()) && m_movable.at(i);
 
         QColor fill = kTileColor;
         if (i == m_hover && movable)
@@ -211,10 +258,10 @@ void BoardView::drawSolvedOverlay(QPainter &p) const
     p.setFont(f);
     p.setPen(kSolvedColor);
     p.drawText(board, Qt::AlignCenter,
-               QStringLiteral("完成！\n共 %1 步").arg(m_model->moveCount()));
+               QStringLiteral("完成！\n共 %1 步").arg(m_solvedMoves));
 }
 
-// ---------- 交互 ----------
+// ---------- 交互：只发信号，不做判断 ----------
 
 void BoardView::mousePressEvent(QMouseEvent *event)
 {
@@ -236,7 +283,10 @@ void BoardView::mouseMoveEvent(QMouseEvent *event)
 
     m_hover = idx;
 
-    const bool clickable = m_model->isMovable(idx) && !m_model->isSolved();
+    // 指针形状属于纯外观，依据外部喂入的"可移动"数据即可决定，
+    // 无需询问 Model。
+    const bool clickable = (idx >= 0 && idx < m_movable.size()
+                            && m_movable.at(idx) && !m_solved);
     setCursor(clickable ? Qt::PointingHandCursor : Qt::ArrowCursor);
     update();
 }

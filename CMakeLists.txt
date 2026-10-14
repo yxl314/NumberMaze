@@ -36,12 +36,14 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets)
 
 add_executable(number-maze
     main.cpp
+    MainWindow.h
+    MainWindow.cpp
     MVC/M/GameModel.h
     MVC/M/GameModel.cpp
     MVC/V/BoardView.h
     MVC/V/BoardView.cpp
-    MVC/C/MainWindow.h
-    MVC/C/MainWindow.cpp
+    MVC/C/Controller.h
+    MVC/C/Controller.cpp
 )
 
 target_link_libraries(number-maze PRIVATE

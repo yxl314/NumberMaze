@@ -8,9 +8,9 @@ int main(int argc, char *argv[])
 
     QApplication::setApplicationName(QStringLiteral("数字迷宫"));
     QApplication::setOrganizationName(QStringLiteral("NumberMaze"));
-    QApplication::setApplicationVersion(QStringLiteral("1.0"));
+    QApplication::setApplicationVersion(QStringLiteral("2.0"));
 
-    mvc::MainWindow window;
+    MainWindow window;
     window.show();
 
     return app.exec();
