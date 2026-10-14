@@ -66,6 +66,9 @@ public:
 
     // 当前节点上的数字（0 表示空格）
     int valueAt(int idx) const { return m_nodes[idx].value; }
+
+    // 直接设置节点数字。仅供恢复初始局面使用（不改变撤销历史）。
+    void setValueAt(int idx, int value) { m_nodes[idx].value = value; }
     const QSet<int> &neighbors(int idx) const { return m_nodes[idx].adj; }
     bool areAdjacent(int a, int b) const { return m_nodes[a].adj.contains(b); }
 

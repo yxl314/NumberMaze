@@ -28,3 +28,7 @@ ui_*.h
 # Python 字节码缓存（若后续加入脚本）
 __pycache__/
 *.py[cod]
+
+# 验证产物
+build/screenshots/
+build/interaction/
