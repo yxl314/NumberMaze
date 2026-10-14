@@ -13,6 +13,9 @@
 #include "Controller.h"
 #include "GameModel.h"
 
+/**
+ * @brief 构造主窗口，按顺序完成组装。
+ */
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
@@ -46,6 +49,9 @@ MainWindow::MainWindow(QWidget *parent)
     m_model->startNewGame(core::Difficulty::Normal);
 }
 
+/**
+ * @brief 搭建菜单栏。
+ */
 void MainWindow::setupMenus()
 {
     QMenu *gameMenu = menuBar()->addMenu(QStringLiteral("游戏(&G)"));
@@ -96,6 +102,9 @@ void MainWindow::setupMenus()
     });
 }
 
+/**
+ * @brief 搭建工具栏。
+ */
 void MainWindow::setupToolBar()
 {
     QToolBar *bar = addToolBar(QStringLiteral("操作"));
@@ -109,6 +118,9 @@ void MainWindow::setupToolBar()
     bar->addAction(m_undoAction);
 }
 
+/**
+ * @brief 搭建状态栏并创建四个标签。
+ */
 void MainWindow::setupStatusBar()
 {
     m_difficultyLabel = new QLabel(this);

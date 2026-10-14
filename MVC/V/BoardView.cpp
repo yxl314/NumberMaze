@@ -21,6 +21,9 @@ const QColor kSolvedColor(255, 214, 102);
 
 } // namespace
 
+/**
+ * @brief 构造视图并设置尺寸策略。
+ */
 BoardView::BoardView(QWidget *parent)
     : QWidget(parent)
 {
@@ -41,6 +44,9 @@ QSize BoardView::minimumSizeHint() const
 
 // ---------- 由控制器喂入的数据 ----------
 
+/**
+ * @brief 设置完整局面并触发重绘。
+ */
 void BoardView::setBoard(const QVector<int> &board)
 {
     m_board = board;
@@ -58,18 +64,27 @@ void BoardView::setBoard(const QVector<int> &board)
     update();
 }
 
+/**
+ * @brief 设置连接关系并触发重绘。
+ */
 void BoardView::setConnections(const QVector<QVector<int>> &adjacency)
 {
     m_adjacency = adjacency;
     update();
 }
 
+/**
+ * @brief 设置各节点是否可移动并触发重绘。
+ */
 void BoardView::setMovable(const QVector<bool> &movable)
 {
     m_movable = movable;
     update();
 }
 
+/**
+ * @brief 设置通关状态。
+ */
 void BoardView::setSolved(bool solved, int moves)
 {
     if (m_solved == solved && m_solvedMoves == moves)
@@ -86,6 +101,9 @@ void BoardView::setSolved(bool solved, int moves)
 
 // ---------- 几何计算 ----------
 
+/**
+ * @brief 计算棋盘绘制区域。
+ */
 QRectF BoardView::boardRect() const
 {
     const qreal side = qMin(width(), height());
@@ -96,11 +114,17 @@ QRectF BoardView::boardRect() const
                   side - 2 * margin);
 }
 
+/**
+ * @brief 由行列换算节点索引。
+ */
 int BoardView::indexAt(int row, int col) const
 {
     return row * m_boardSize + col;
 }
 
+/**
+ * @brief 计算节点中心的屏幕坐标。
+ */
 QPointF BoardView::centerOf(int index) const
 {
     const QRectF board = boardRect();
@@ -111,12 +135,18 @@ QPointF BoardView::centerOf(int index) const
                    board.top() + (row + 0.5) * cell);
 }
 
+/**
+ * @brief 计算节点半径，随控件尺寸缩放。
+ */
 qreal BoardView::circleRadius() const
 {
     const QRectF board = boardRect();
     return qMin(board.width(), board.height()) / m_boardSize * 0.38;
 }
 
+/**
+ * @brief 查找坐标命中的节点。
+ */
 int BoardView::nodeAt(const QPoint &pos) const
 {
     const qreal r = circleRadius();
@@ -131,6 +161,9 @@ int BoardView::nodeAt(const QPoint &pos) const
 
 // ---------- 绘制 ----------
 
+/**
+ * @brief 绘制整个棋盘。
+ */
 void BoardView::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
@@ -148,6 +181,9 @@ void BoardView::paintEvent(QPaintEvent *)
         drawSolvedOverlay(p);
 }
 
+/**
+ * @brief 绘制棋盘背景。
+ */
 void BoardView::drawBackground(QPainter &p) const
 {
     const QRectF board = boardRect();
@@ -158,6 +194,9 @@ void BoardView::drawBackground(QPainter &p) const
     p.drawRoundedRect(QRectF(rect()).adjusted(2, 2, -2, -2), corner, corner);
 }
 
+/**
+ * @brief 绘制节点之间的连线（强制显示）。
+ */
 void BoardView::drawConnections(QPainter &p, qreal radius) const
 {
     // 连线强制显示：本项目的拓扑含对角线连接，
@@ -177,6 +216,9 @@ void BoardView::drawConnections(QPainter &p, qreal radius) const
     }
 }
 
+/**
+ * @brief 绘制空格标记。
+ */
 void BoardView::drawBlankMarker(QPainter &p, qreal radius) const
 {
     // 空格位置由局面数据推出，View 不需要向外部询问
@@ -195,6 +237,9 @@ void BoardView::drawBlankMarker(QPainter &p, qreal radius) const
     p.drawEllipse(centerOf(blank), radius, radius);
 }
 
+/**
+ * @brief 绘制各节点上的数字圆片。
+ */
 void BoardView::drawTiles(QPainter &p, qreal radius) const
 {
     QFont f = font();
@@ -243,6 +288,9 @@ void BoardView::drawTiles(QPainter &p, qreal radius) const
     }
 }
 
+/**
+ * @brief 绘制通关覆盖层。
+ */
 void BoardView::drawSolvedOverlay(QPainter &p) const
 {
     const QRectF board = boardRect();
@@ -263,6 +311,9 @@ void BoardView::drawSolvedOverlay(QPainter &p) const
 
 // ---------- 交互：只发信号，不做判断 ----------
 
+/**
+ * @brief 鼠标按下处理，仅把命中节点以信号抛出。
+ */
 void BoardView::mousePressEvent(QMouseEvent *event)
 {
     if (event->button() != Qt::LeftButton) {
@@ -275,6 +326,9 @@ void BoardView::mousePressEvent(QMouseEvent *event)
         emit nodeClicked(idx);
 }
 
+/**
+ * @brief 鼠标移动处理，更新悬停节点与指针形状。
+ */
 void BoardView::mouseMoveEvent(QMouseEvent *event)
 {
     const int idx = nodeAt(event->pos());
@@ -291,6 +345,9 @@ void BoardView::mouseMoveEvent(QMouseEvent *event)
     update();
 }
 
+/**
+ * @brief 鼠标离开处理，清除悬停状态。
+ */
 void BoardView::leaveEvent(QEvent *)
 {
     if (m_hover == -1)

@@ -4,6 +4,9 @@
 
 namespace core {
 
+/**
+ * @brief 构造拓扑，登记本项目设计的全部连接关系。
+ */
 Graph::Graph()
 {
     // 本项目的连接关系（使用 1-based 编号书写，便于与设计稿对照）。
@@ -22,6 +25,9 @@ Graph::Graph()
     addEdge(15, 16);
 }
 
+/**
+ * @brief 添加一条无向边；先查重再插入，重复调用不会产生重复项。
+ */
 void Graph::addEdge(int a, int b)
 {
     const int ia = a - 1;
@@ -35,22 +41,34 @@ void Graph::addEdge(int a, int b)
     }
 }
 
+/**
+ * @brief 取得节点的邻居列表。
+ */
 const std::vector<int> &Graph::neighbors(int index) const
 {
     return m_adjacency[index];
 }
 
+/**
+ * @brief 判断两个节点是否直接相连。
+ */
 bool Graph::areAdjacent(int a, int b) const
 {
     const auto &na = m_adjacency[a];
     return std::find(na.begin(), na.end(), b) != na.end();
 }
 
+/**
+ * @brief 取得节点的度数。
+ */
 std::size_t Graph::degree(int index) const
 {
     return m_adjacency[index].size();
 }
 
+/**
+ * @brief 取得已解状态下该位置应有的数字。
+ */
 int Graph::solvedValueAt(int index)
 {
     // 已解状态：1..15 顺序排列，最后一个位置留空

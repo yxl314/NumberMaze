@@ -20,6 +20,9 @@ Controller::Controller(BoardView *view, GameModel *model, QMainWindow *window,
 {
 }
 
+/**
+ * @brief 登记状态栏上的四个标签。
+ */
 void Controller::setStatusLabels(QLabel *difficulty, QLabel *moves,
                                  QLabel *time, QLabel *best)
 {
@@ -29,12 +32,18 @@ void Controller::setStatusLabels(QLabel *difficulty, QLabel *moves,
     m_bestLabel = best;
 }
 
+/**
+ * @brief 登记悔棋动作，用于同步其可用状态。
+ */
 void Controller::setUndoAction(QAction *action)
 {
     m_undoAction = action;
 }
 
 // 这里是严格 MVC 的核心：V 与 M 之间的每一条通路都必须经过本函数建立的连接。
+/**
+ * @brief 建立全部连接并做首次数据同步。
+ */
 void Controller::initialize()
 {
     // ---- View -> Controller -> Model ----
@@ -62,6 +71,9 @@ void Controller::initialize()
 
 // ---------- 来自 View ----------
 
+/**
+ * @brief 转发视图的点击事件给模型。
+ */
 void Controller::handleNodeClicked(int index)
 {
     // 该不该移动、能不能移动都由 Model/Core 判断，
@@ -71,17 +83,26 @@ void Controller::handleNodeClicked(int index)
 
 // ---------- 来自 Model ----------
 
+/**
+ * @brief 处理局面变化，触发数据搬运。
+ */
 void Controller::handleBoardChanged()
 {
     syncBoardToView();
 }
 
+/**
+ * @brief 处理状态变化，刷新状态栏与标题。
+ */
 void Controller::handleStatusChanged()
 {
     refreshStatusBar();
     refreshWindowTitle();
 }
 
+/**
+ * @brief 处理通关事件，弹出结果对话框。
+ */
 void Controller::handleSolved(int moves, int seconds, bool isNewRecord)
 {
     refreshStatusBar();
@@ -101,16 +122,25 @@ void Controller::handleSolved(int moves, int seconds, bool isNewRecord)
 
 // ---------- 来自菜单 ----------
 
+/**
+ * @brief 处理「新游戏」菜单项。
+ */
 void Controller::handleNewGame(core::Difficulty level)
 {
     m_model->startNewGame(level);
 }
 
+/**
+ * @brief 处理「重开本局」动作。
+ */
 void Controller::handleRestart()
 {
     m_model->restartCurrentGame();
 }
 
+/**
+ * @brief 处理「悔棋」动作。
+ */
 void Controller::handleUndo()
 {
     m_model->requestUndo();
@@ -118,6 +148,9 @@ void Controller::handleUndo()
 
 // ---------- 数据搬运与界面刷新 ----------
 
+/**
+ * @brief 把模型的局面数据搬运给视图。
+ */
 void Controller::syncBoardToView()
 {
     // 把 Model 的数据搬给 View。View 不认识 Model，
@@ -127,6 +160,9 @@ void Controller::syncBoardToView()
     m_view->setSolved(m_model->isSolved(), m_model->moveCount());
 }
 
+/**
+ * @brief 刷新状态栏文字与悔棋动作的可用状态。
+ */
 void Controller::refreshStatusBar()
 {
     if (m_difficultyLabel)
@@ -153,6 +189,9 @@ void Controller::refreshStatusBar()
         m_undoAction->setEnabled(m_model->canUndo());
 }
 
+/**
+ * @brief 刷新窗口标题，使其包含当前难度。
+ */
 void Controller::refreshWindowTitle()
 {
     if (m_window)

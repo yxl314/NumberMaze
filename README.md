@@ -112,6 +112,24 @@ number-maze/
 | Controller | 连接 V 与 M、搬运数据、刷新菜单与状态栏 | 游戏规则、绘制 |
 | MainWindow | 实例化 V/M/C、搭建菜单与状态栏 | 信号转接、游戏逻辑 |
 
+## 代码文档
+
+全部公开接口按标准 Doxygen 风格撰写注释：`@file` / `@brief` / `@param`
+/ `@return` / `@note` / `@par`。接口的 `@param` 与 `@return` 统一写在
+头文件，实现文件只保留 `@brief` 与实现说明，避免两处重复。
+
+生成 HTML 文档：
+
+```bash
+doxygen Doxyfile          # 输出到 docs/html/
+```
+
+`Doxyfile` 已开启 `WARN_IF_UNDOCUMENTED`，因此**生成过程零警告**即可
+确认注释的标签拼写、参数名与函数签名完全吻合。当前状态为零警告。
+
+文档内容包含类关系图、调用图（依赖 `dot`），以及中文注释的完整呈现，
+输出语言已设为中文。
+
 ## 构建
 
 需要 Qt6 (Widgets)、CMake 3.16+、支持 C++17 的编译器。

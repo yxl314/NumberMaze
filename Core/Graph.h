@@ -1,3 +1,10 @@
+/**
+ * @file Graph.h
+ * @brief 棋盘的图拓扑结构。
+ *
+ * 本文件属于 Core 层，为纯 C++ 实现，不依赖任何 GUI 框架。
+ */
+
 #ifndef CORE_GRAPH_H
 #define CORE_GRAPH_H
 
@@ -7,47 +14,121 @@
 
 namespace core {
 
-// 棋盘边长（4x4 = 16 个节点）
+/// 棋盘边长（4x4）。
 constexpr int kBoardSize = 4;
+
+/// 节点总数。
 constexpr int kNodeCount = kBoardSize * kBoardSize;
 
-// 图的拓扑结构。
-//
-// 注意：节点虽按 4x4 方阵摆放，但连接关系并非网格邻居，
-// 而是本项目专门设计的拓扑，共 22 条边，其中包含对角线连接
-// （例如 1-6、3-8）。这正是本游戏不能靠空间直觉判断、
-// 难度高于普通数字华容道的原因。
-//
-// 该类只描述"谁和谁相连"，不持有任何游戏状态，属于纯数据。
+/**
+ * @brief 棋盘的连接拓扑。
+ *
+ * @par 本项目的核心特性
+ * 节点虽按 4x4 方阵摆放，但连接关系并非网格邻居，而是本项目专门
+ * 设计的拓扑：共 22 条边，其中包含多条对角线连接（例如 1-6、3-8）。
+ * 因此玩家不能凭空间直觉判断可移动性，难度高于普通数字华容道。
+ *
+ * @par 职责
+ * 本类只描述"谁和谁相连"，不持有任何游戏状态。棋盘上放什么数字
+ * 由 GameState 负责，两者刻意分离，使局面可以被廉价地复制与撤销。
+ *
+ * @note 节点索引统一从 0 开始，与方阵的行列顺序一致；
+ *       而边的定义沿用 1 起始的编号书写，便于与设计稿对照。
+ */
 class Graph
 {
 public:
+    /**
+     * @brief 构造拓扑，建立全部 22 条边。
+     *
+     * 构造过程是幂等的：重复添加同一条边不会产生重复邻接项，
+     * 边数也不会被重复累计。
+     */
     Graph();
 
-    // 节点 index 的邻居列表（index 从 0 开始）
+    /**
+     * @brief 取得节点的邻居列表。
+     *
+     * @param index 节点索引，取值区间为 [0, kNodeCount)。
+     * @return 邻居索引的常量引用；返回的容器归本对象所有，
+     *         调用者不得修改或释放。
+     */
     const std::vector<int> &neighbors(int index) const;
 
-    // 两个节点是否直接相连
+    /**
+     * @brief 判断两个节点是否直接相连。
+     *
+     * @param a 第一个节点索引。
+     * @param b 第二个节点索引。
+     * @return 直接相连返回 true，否则返回 false。
+     */
     bool areAdjacent(int a, int b) const;
 
-    // 节点度数
+    /**
+     * @brief 取得节点的度数（即邻居数量）。
+     *
+     * @param index 节点索引。
+     * @return 该节点的邻居数量。
+     */
     std::size_t degree(int index) const;
 
-    // 边的总数
+    /**
+     * @brief 取得图中边的总数。
+     *
+     * @return 边的条数，本项目中恒为 22。
+     */
     std::size_t edgeCount() const { return m_edgeCount; }
 
-    // 节点在方阵中的行列（用于绘制，行/列均从 0 开始）
+    /**
+     * @brief 取得节点所在的行。
+     *
+     * @param index 节点索引。
+     * @return 行号，从 0 开始。
+     */
     static int rowOf(int index) { return index / kBoardSize; }
+
+    /**
+     * @brief 取得节点所在的列。
+     *
+     * @param index 节点索引。
+     * @return 列号，从 0 开始。
+     */
     static int colOf(int index) { return index % kBoardSize; }
+
+    /**
+     * @brief 由行列换算节点索引。
+     *
+     * @param row 行号，从 0 开始。
+     * @param col 列号，从 0 开始。
+     * @return 对应的节点索引。
+     */
     static int indexOf(int row, int col) { return row * kBoardSize + col; }
 
-    // 已解状态下，各位置应放置的数字（最后一个位置为 0，表示空格）
+    /**
+     * @brief 取得已解状态下该位置应有的数字。
+     *
+     * 已解状态为 1 到 15 依次排列，最后一个位置为 0，表示空格。
+     *
+     * @param index 节点索引。
+     * @return 该位置应有的数字；0 表示空格。
+     */
     static int solvedValueAt(int index);
 
 private:
+    /**
+     * @brief 添加一条无向边。
+     *
+     * 若该边已存在则不重复添加，边数也不会重复累计。
+     *
+     * @param a 端点编号（1 起始）。
+     * @param b 另一个端点编号（1 起始）。
+     */
     void addEdge(int a, int b);
 
+    /// 邻接表：m_adjacency[i] 存放节点 i 的所有邻居索引。
     std::array<std::vector<int>, kNodeCount> m_adjacency;
+
+    /// 已添加的边数。
     std::size_t m_edgeCount = 0;
 };
 

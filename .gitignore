@@ -36,3 +36,6 @@ build/interaction/
 # Qt Creator 本地配置
 .qtcreator/
 *.user
+
+# Doxygen 生成的文档
+docs/

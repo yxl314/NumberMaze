@@ -25,18 +25,27 @@ private:
 
 } // namespace
 
+/**
+ * @brief 默认构造，使用内置随机源。
+ */
 GameState::GameState()
     : m_random(nullptr)
 {
     reset();
 }
 
+/**
+ * @brief 使用外部随机源构造，便于测试复现。
+ */
 GameState::GameState(Random *random)
     : m_random(random)
 {
     reset();
 }
 
+/**
+ * @brief 取得可用的随机源。
+ */
 GameState::Random *GameState::randomSource()
 {
     if (m_random != nullptr)
@@ -47,6 +56,9 @@ GameState::Random *GameState::randomSource()
     return &fallback;
 }
 
+/**
+ * @brief 重置为已解状态，并清空历史与步数。
+ */
 void GameState::reset()
 {
     for (int i = 0; i < kNodeCount; ++i)
@@ -56,6 +68,9 @@ void GameState::reset()
     m_moveCount = 0;
 }
 
+/**
+ * @brief 取得空格所在索引。
+ */
 int GameState::blankIndex() const
 {
     for (int i = 0; i < kNodeCount; ++i) {
@@ -65,6 +80,9 @@ int GameState::blankIndex() const
     return -1;
 }
 
+/**
+ * @brief 打乱为新局，所得局面必然可解。
+ */
 void GameState::scramble(Difficulty level)
 {
     reset();
@@ -113,6 +131,9 @@ void GameState::scramble(Difficulty level)
     m_moveCount = 0;
 }
 
+/**
+ * @brief 判断节点是否可移动。
+ */
 bool GameState::isMovable(int index) const
 {
     if (index < 0 || index >= kNodeCount)
@@ -124,6 +145,9 @@ bool GameState::isMovable(int index) const
     return blank >= 0 && m_graph.areAdjacent(index, blank);
 }
 
+/**
+ * @brief 把指定节点上的数字移入空格。
+ */
 bool GameState::move(int index)
 {
     if (!isMovable(index))
@@ -138,6 +162,9 @@ bool GameState::move(int index)
     return true;
 }
 
+/**
+ * @brief 撤销上一步移动。
+ */
 bool GameState::undo()
 {
     if (m_history.empty())
@@ -154,6 +181,9 @@ bool GameState::undo()
     return true;
 }
 
+/**
+ * @brief 判断是否已经还原成解。
+ */
 bool GameState::isSolved() const
 {
     for (int i = 0; i < kNodeCount; ++i) {
@@ -163,11 +193,17 @@ bool GameState::isSolved() const
     return true;
 }
 
+/**
+ * @brief 取得当前局面的快照。
+ */
 std::vector<int> GameState::board() const
 {
     return std::vector<int>(m_board.begin(), m_board.end());
 }
 
+/**
+ * @brief 直接设置棋盘内容，仅供测试与恢复局面使用。
+ */
 void GameState::setBoard(const std::vector<int> &board)
 {
     if (board.size() != static_cast<std::size_t>(kNodeCount))
