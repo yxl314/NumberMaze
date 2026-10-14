@@ -1,0 +1,30 @@
+# 构建产物
+build/
+build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+*.o
+*.a
+*.so
+
+# Qt 自动生成
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+*.autosave
+.qmake.stash
+
+# 编辑器与临时文件
+*.swp
+*.tmp
+*.log
+.vscode/
+.idea/
+
+# Python 字节码缓存（若后续加入脚本）
+__pycache__/
+*.py[cod]
