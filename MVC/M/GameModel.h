@@ -13,6 +13,7 @@
 #include <QString>
 #include <QTime>
 #include <QVector>
+#include <vector>
 
 #include "GameState.h"
 
@@ -140,7 +141,9 @@ public slots:
     void startNewGame();
 
     /**
-     * @brief 重开本局：清零计时与步数并重新打乱。
+     * @brief 重开本局。
+     *
+     * 把棋盘复位到本局开始时的局面，并清零计时与步数。
      */
     void restartCurrentGame();
 
@@ -224,6 +227,9 @@ private:
 
     /// 游戏状态与规则（来自 Core 层）。
     core::GameState m_state;
+
+    /// 本局开始时的局面快照，供"重开本局"复位使用。
+    std::vector<int> m_initialBoard;
 
     /// 当前难度。
     core::Difficulty m_difficulty = core::Difficulty::Normal;

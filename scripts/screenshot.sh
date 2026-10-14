@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# 自动化验证：在虚拟显示中启动游戏并截取界面。
-# 目的是确认渲染真的可用，而不是只依赖"编译通过"。
+# 在虚拟显示中启动游戏并截取界面，用于检查渲染结果。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -16,8 +15,8 @@ fi
 mkdir -p "$OUT_DIR"
 echo "截图输出目录: $OUT_DIR"
 
-# 程序与 import 必须在同一个 X 显示里，否则 import 连到别的
-# DISPLAY，抓不到窗口。内层脚本用 heredoc 传入，避免引号嵌套。
+# 程序与 import 必须在同一个 X 显示里，否则 import 会连到别的
+# DISPLAY 而抓不到窗口。内层脚本经 heredoc 传入，避免引号嵌套。
 xvfb-run -a --server-args="-screen 0 1024x900x24" bash -s <<INNER
 set -e
 export QT_QPA_PLATFORM=xcb

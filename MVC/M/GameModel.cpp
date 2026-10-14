@@ -125,7 +125,8 @@ void GameModel::restartCurrentGame()
     m_solvedNotified = false;
     stopTimer();
 
-    m_state.scramble(m_difficulty);
+    // 恢复到本局开始的局面，使"重开"名副其实
+    m_state.restore(m_initialBoard);
 
     emit boardChanged();
     emit statusChanged();

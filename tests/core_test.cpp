@@ -5,13 +5,11 @@
 #include <cstdio>
 #include <vector>
 
-// Core 层自测。此文件刻意不依赖 Qt，可单独编译运行：
+// Core 层自测。不依赖 Qt，可脱离构建系统单独编译：
 //
 //   g++ -std=c++17 -Wall -Wextra -ICore tests/core_test.cpp
 //       Core/Graph.cpp Core/GameState.cpp -o core_test
 //   ./core_test
-//
-// 这同时证明了 Core 是纯 C++（不链接任何 GUI 框架）。
 
 namespace {
 
@@ -49,7 +47,7 @@ void testGraph()
     check(g.neighbors(0).size() == 3, "节点 1 的度为 3");
     check(g.degree(4) == 2, "节点 5 的度为 2");
 
-    // 对角线连接是本项目的核心难点，必须存在
+    // 对角线连接是难度的主要来源，必须存在
     check(g.areAdjacent(0, 5), "节点 1 与 6 相连（对角连接）");
     check(g.areAdjacent(2, 7), "节点 3 与 8 相连（对角连接）");
     check(!g.areAdjacent(0, 3), "节点 1 与 4 不相连");
@@ -167,9 +165,7 @@ void testScramble()
     check(allOk, "四档难度打乱均正确，且不进入撤销历史");
 }
 
-// 可解性的核心验证：
-// 打乱由合法的随机游走构成，所以把历史里的移动逐步撤销，
-// 必然回到已解状态。这以构造方式证明了"任何打乱局面都可解"。
+// 打乱由合法移动构成，因此把这些移动逐步撤销必然回到已解状态。
 void testSolvabilityByUndo()
 {
     std::puts("=== 可解性：移动全部撤销即复原 ===");
@@ -218,6 +214,10 @@ void testSolvabilityByUndo()
 
 } // namespace
 
+/**
+ * @brief 运行 Core 层的全部验证用例。
+ * @return 失败项数量；0 表示全部通过。
+ */
 int main()
 {
     testGraph();

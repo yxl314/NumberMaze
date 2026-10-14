@@ -23,23 +23,21 @@ constexpr int kNodeCount = kBoardSize * kBoardSize;
 /**
  * @brief 棋盘的连接拓扑。
  *
- * @par 本项目的核心特性
- * 节点虽按 4x4 方阵摆放，但连接关系并非网格邻居，而是本项目专门
- * 设计的拓扑：共 22 条边，其中包含多条对角线连接（例如 1-6、3-8）。
- * 因此玩家不能凭空间直觉判断可移动性，难度高于普通数字华容道。
+ * @par 拓扑特征
+ * 节点按 4x4 方阵摆放，但连接关系不是网格邻居：共 22 条边，其中包含
+ * 多条对角线连接（例如 1-6、3-8）。因此无法凭位置直觉判断可移动性。
  *
  * @par 职责
- * 本类只描述"谁和谁相连"，不持有任何游戏状态。棋盘上放什么数字
- * 由 GameState 负责，两者刻意分离，使局面可以被廉价地复制与撤销。
+ * 只描述谁和谁相连，不持有任何游戏状态。棋盘上的数字由 GameState
+ * 负责，两者分离使局面可以被低成本地复制与撤销。
  *
- * @note 节点索引统一从 0 开始，与方阵的行列顺序一致；
- *       而边的定义沿用 1 起始的编号书写，便于与设计稿对照。
+ * @note 节点索引从 0 开始；边的定义以 1 起始书写，与节点编号习惯一致。
  */
 class Graph
 {
 public:
     /**
-     * @brief 构造拓扑，建立全部 22 条边。
+     * @brief 构造拓扑，建立全部连接。
      *
      * 构造过程是幂等的：重复添加同一条边不会产生重复邻接项，
      * 边数也不会被重复累计。
@@ -75,7 +73,7 @@ public:
     /**
      * @brief 取得图中边的总数。
      *
-     * @return 边的条数，本项目中恒为 22。
+     * @return 边的条数，当前拓扑为 22。
      */
     std::size_t edgeCount() const { return m_edgeCount; }
 
@@ -94,15 +92,6 @@ public:
      * @return 列号，从 0 开始。
      */
     static int colOf(int index) { return index % kBoardSize; }
-
-    /**
-     * @brief 由行列换算节点索引。
-     *
-     * @param row 行号，从 0 开始。
-     * @param col 列号，从 0 开始。
-     * @return 对应的节点索引。
-     */
-    static int indexOf(int row, int col) { return row * kBoardSize + col; }
 
     /**
      * @brief 取得已解状态下该位置应有的数字。

@@ -5,12 +5,12 @@
 namespace core {
 
 /**
- * @brief 构造拓扑，登记本项目设计的全部连接关系。
+ * @brief 构造拓扑，登记全部连接关系。
  */
 Graph::Graph()
 {
-    // 本项目的连接关系（使用 1-based 编号书写，便于与设计稿对照）。
-    // 其中 (1,6)、(3,8) 等为对角线连接，是难度的主要来源。
+    // 连接以 1 起始编号书写，与节点编号习惯一致。
+    // (1,6)、(3,8) 等为对角线连接。
     addEdge(1, 5);  addEdge(1, 6);  addEdge(1, 2);
     addEdge(2, 5);  addEdge(2, 7);
     addEdge(3, 6);  addEdge(3, 8);  addEdge(3, 4);
@@ -26,7 +26,7 @@ Graph::Graph()
 }
 
 /**
- * @brief 添加一条无向边；先查重再插入，重复调用不会产生重复项。
+ * @brief 添加一条无向边；重复添加同一条边会被忽略。
  */
 void Graph::addEdge(int a, int b)
 {

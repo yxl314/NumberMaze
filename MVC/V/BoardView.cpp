@@ -199,7 +199,7 @@ void BoardView::drawBackground(QPainter &p) const
  */
 void BoardView::drawConnections(QPainter &p, qreal radius) const
 {
-    // 连线强制显示：本项目的拓扑含对角线连接，
+    // 连线强制显示：拓扑含对角线连接，
     // 不画出连线玩家无从判断哪些节点可以移动。
     const qreal width = qMax(1.5, radius * 0.115);
 

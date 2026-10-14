@@ -78,13 +78,6 @@ public:
     explicit GameState(Random *random);
 
     /**
-     * @brief 重置为已解状态。
-     *
-     * 棋盘恢复为 1 到 15 依次排列、空格居末，并清空撤销历史与步数。
-     */
-    void reset();
-
-    /**
      * @brief 打乱为新局。
      *
      * 从已解状态出发执行若干次合法移动，步数由难度决定。
@@ -179,17 +172,27 @@ public:
     std::vector<int> board() const;
 
     /**
-     * @brief 直接设置棋盘内容。
+     * @brief 恢复到先前保存的局面。
      *
-     * 仅供测试与恢复局面使用。
+     * 用于"重开本局"：配合 board() 保存的初始快照，把棋盘复位到
+     * 本局开始时的状态。
      *
-     * @param board 新局面；长度必须等于 kNodeCount，否则本次调用被忽略。
+     * @param snapshot 由 board() 取得的快照。
+     * @return 恢复成功返回 true；快照长度不符时返回 false 且状态不变。
      *
-     * @note 本函数会清空撤销历史与步数，因此不可用于实现"悔棋"。
+     * @note 恢复后清空撤销历史与步数，因快照属于新一局的起点。
      */
-    void setBoard(const std::vector<int> &board);
+    bool restore(const std::vector<int> &snapshot);
 
 private:
+    /**
+     * @brief 重置为已解状态。
+     *
+     * 棋盘恢复为 1 到 15 依次排列、空格居末，并清空撤销历史与步数。
+     * 仅供构造与打乱使用。
+     */
+    void reset();
+
     /// 撤销栈：按顺序记录每次移动前的空格位置。
     using History = std::vector<int>;
 

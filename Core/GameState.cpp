@@ -202,16 +202,17 @@ std::vector<int> GameState::board() const
 }
 
 /**
- * @brief 直接设置棋盘内容，仅供测试与恢复局面使用。
+ * @brief 恢复到先前保存的局面。
  */
-void GameState::setBoard(const std::vector<int> &board)
+bool GameState::restore(const std::vector<int> &snapshot)
 {
-    if (board.size() != static_cast<std::size_t>(kNodeCount))
-        return;
+    if (snapshot.size() != static_cast<std::size_t>(kNodeCount))
+        return false;
 
-    std::copy(board.begin(), board.end(), m_board.begin());
+    std::copy(snapshot.begin(), snapshot.end(), m_board.begin());
     m_history.clear();
     m_moveCount = 0;
+    return true;
 }
 
 } // namespace core

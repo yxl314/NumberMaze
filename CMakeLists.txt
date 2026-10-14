@@ -73,7 +73,14 @@ target_compile_options(core-test PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra>
 )
 
+add_executable(restart-test tests/restart_test.cpp)
+target_link_libraries(restart-test PRIVATE number-maze-core)
+target_compile_options(restart-test PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra>
+)
+
 enable_testing()
 add_test(NAME core-test COMMAND core-test)
+add_test(NAME restart-test COMMAND restart-test)
 
 install(TARGETS number-maze RUNTIME DESTINATION bin)
