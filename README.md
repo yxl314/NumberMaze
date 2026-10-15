@@ -67,8 +67,8 @@
 
 | 约束 | 核验方式 |
 |---|---|
-| V 层不持有 M 层指针，也不 include 其头文件 | `grep -c GameModel MVC/V/*` 结果为 0 |
-| M 层不持有 V 层指针，也不 include 其头文件 | `grep -c BoardView MVC/M/*` 结果为 0 |
+| V 层不持有 M 层指针，也不 include 其头文件 | `grep -c GameModel source/Number-naze/MVC/View/*` 结果为 0 |
+| M 层不持有 V 层指针，也不 include 其头文件 | `grep -c BoardView source/Number-naze/MVC/Model/*` 结果为 0 |
 | V 与 M 之间的一切通信都经过 C 层 | Controller 是唯一同时持有两者引用的类 |
 | Core 不含任何 Qt 类型 | `number-maze-core` 静态库不链接 Qt 目标 |
 
@@ -86,20 +86,24 @@ Qt 目标。若有人在 Core 里引入 Qt 类型，编译会直接失败。
 ```
 number-maze/
 ├── CMakeLists.txt
-├── main.cpp                    程序入口
-├── MainWindow.h/.cpp           组合根：实例化 V/M/C，搭建外壳
-├── Core/                       游戏核心（纯 C++）
-│   ├── Difficulty.h            难度定义
-│   ├── Graph.h/.cpp            图拓扑（22 条边，含对角连接）
-│   └── GameState.h/.cpp        棋盘状态与规则
-├── MVC/
-│   ├── M/GameModel.h/.cpp      模型：数据、计时、成绩、调用 Core
-│   ├── V/BoardView.h/.cpp      视图：绘制与信号
-│   └── C/Controller.h/.cpp     控制器：连接 V 与 M
-├── tests/core_test.cpp         Core 自测（不依赖 Qt）
-└── scripts/
-    ├── screenshot.sh           渲染验证
-    └── interaction-test.sh     交互验证
+├── Doxyfile                    文档生成配置
+├── scripts/
+│   ├── screenshot.sh           渲染验证
+│   └── interaction-test.sh     交互验证
+└── source/Number-naze/
+    ├── main.cpp                程序入口
+    ├── Core/                   游戏核心（纯 C++）
+    │   ├── Difficulty.h        难度定义
+    │   ├── Graph.h/.cpp        图拓扑（22 条边，含对角连接）
+    │   └── GameState.h/.cpp    棋盘状态与规则
+    ├── MVC/
+    │   ├── MainWindow.h/.cpp   组合根：实例化 V/M/C，搭建外壳
+    │   ├── Model/GameModel.h/.cpp       模型：数据、计时、成绩、调用 Core
+    │   ├── View/BoardView.h/.cpp        视图：绘制与信号
+    │   └── Controller/Controller.h/.cpp 控制器：连接 V 与 M
+    └── tests/                  Core 自测（不依赖 Qt）
+        ├── core_test.cpp
+        └── restart_test.cpp
 ```
 
 各层职责边界：
@@ -148,7 +152,8 @@ Core 层带自测，**不依赖 Qt，可单独编译运行**：
 # 通过 CMake
 cd build && ctest --output-on-failure
 
-# 或直接编译，验证 Core 确实是纯 C++
+# 或直接编译，验证 Core 确实是纯 C++（在源码目录下执行）
+cd source/Number-naze
 g++ -std=c++17 -ICore tests/core_test.cpp Core/Graph.cpp Core/GameState.cpp \
     -o core_test && ./core_test
 ```
