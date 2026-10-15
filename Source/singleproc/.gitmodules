@@ -1,0 +1,3 @@
+[submodule "cxx_ci"]
+	path = cxx_ci
+	url = git@github.com:yxl314/cxx_ci.git

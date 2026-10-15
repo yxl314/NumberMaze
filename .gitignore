@@ -33,9 +33,16 @@ __pycache__/
 build/screenshots/
 build/interaction/
 
+# 门禁产物
+build/ci-logs/
+ci.xfail
+
 # Qt Creator 本地配置
 .qtcreator/
 *.user
 
 # Doxygen 生成的文档
 docs/
+
+# Python 字节码缓存（工具链用 Python 写成）
+.pytest_cache/

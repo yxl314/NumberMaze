@@ -1,0 +1,29 @@
+{
+  "why": "两侧 platform.py 是刻意保留的平行实现（两个项目互不 import）。这份 JSON 是共用的一份定义，两侧各自的测试拿自己的模块与它比对——测试本身不跨项目 import。",
+  "support_line": "支持面：GNU/Linux 全部能力；macOS / BSD 只保证排版与风格（内存检查不可用）；其余平台不支持",
+  "levels": {
+    "full": "full",
+    "limited": "limited",
+    "unsupported": "unsupported"
+  },
+  "unix_names": [
+    "linux",
+    "darwin",
+    "freebsd",
+    "openbsd",
+    "netbsd",
+    "dragonfly"
+  ],
+  "level_table": {
+    "linux": "full",
+    "darwin": "limited",
+    "freebsd": "limited",
+    "openbsd": "limited",
+    "netbsd": "limited",
+    "dragonfly": "limited",
+    "windows": "unsupported",
+    "cygwin": "unsupported",
+    "msys": "unsupported"
+  },
+  "capability_note": "级别按 os.uname 的系统名判（启动守卫用）；某项能力能不能用由 capability() 实测，不靠查表"
+}

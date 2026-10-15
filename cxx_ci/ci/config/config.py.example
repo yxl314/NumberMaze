@@ -1,0 +1,342 @@
+"""项目配置。
+
+本文件由 ci/lib/config.py 的元数据生成，**请勿手改**：要改说明改元数据表，要改
+取值就复制成 config/config.py 再改。复制方法：
+
+    cp config/config.py.example config/config.py
+
+路径一律用 ROOT / "..." 书写，与运行时的当前工作目录无关；也可直接写绝对路径。
+"""
+
+from pathlib import Path
+
+# 与另一个项目（standardize）之间的契约版本。两侧各自声明，各侧入口在加载配置
+# 时都拿它与本工具实现比对；不一致说明配置与工具取自不同代，直接拒绝执行。
+# 不写则取工具缺省并静默通过。
+CONTRACT_VERSION = 3
+
+# 本文件所在的工具目录，即 cxx_ci 自身
+TOOL_ROOT = Path(__file__).resolve().parents[1]
+
+# ---- 工程
+
+# [必需] 被 CI 的项目根
+#   推导: 无：必须显式写
+#   何时要动: 首次接入；工具与项目不同级、或放在项目内部时改这里
+ROOT = TOOL_ROOT.parent
+
+# [必需] 构建工具：cmake、qmake 或 qmake6
+#   推导: 无：必须显式写
+#   何时要动: 首次接入；Qt6 工程写 "qmake6"
+BUILD_TOOL = "cmake"
+
+
+# ---- 构建
+
+# [常用] 构建工具的可执行文件名，留空自动探测
+#   推导: 留空＝按 BUILD_TOOL 在 PATH 上找（兼容 cmake3 这类带后缀命名）
+#   何时要动: 机器上同时装着两个版本的构建工具时
+
+# [常用] 项目构建文件：cmake 用 CMakeLists.txt，qmake 用 .pro
+#   推导: 留空＝按 BUILD_TOOL 在 ROOT 下自动探测（探测结果会提示一次）
+#   何时要动: 自动探测报错或有多份候选时显式点名
+BUILD_FILE = ROOT / "CMakeLists.txt"
+
+# [常用] 项目编译输出目录
+#   推导: 留空＝ROOT/build
+#   何时要动: 构建产物不落在 build 时
+BUILD_DIR = ROOT / "build"
+
+# [常用] 编译器名，可带版本或交叉前缀（如 g++-4.4）
+#   推导: 留空＝由构建工具自己的缺省决定
+#   何时要动: 交叉编译或机器上有多个编译器时
+CXX_COMPILER = "g++"
+
+# [常用] 目标语言标准（c++98、c++14、gnu++98）
+#   推导: 留空＝不传 -std=
+#   何时要动: 需要把语言标准钉死时
+CXX_STANDARD = "c++98"
+
+
+# ---- 测试
+
+# [常用] 测试构建文件，命名规则同 BUILD_FILE
+#   推导: 留空＝与项目共用同一份构建文件
+#   何时要动: 测试工程与主工程分开构建时
+TEST_BUILD_FILE = ROOT / "test" / "CMakeLists.txt"
+
+# [常用] 测试编译输出目录
+#   推导: 留空＝与 BUILD_DIR 相同
+#   何时要动: 测试树独立构建时
+TEST_BUILD_DIR = ROOT / "build" / "test"
+
+# [常用] 运行测试的 argv 指令，第一项是可执行文件
+#   推导: 留空＝不跑测试，run_test 与 memcheck 标 [SKIPPED]
+#   何时要动: 首次接入；按所用框架改成 gtest 二进制 / ctest / make check
+TEST_COMMAND = [TEST_BUILD_DIR / "run_tests"]
+
+# [常用] 执行测试指令时的工作目录
+#   推导: 留空＝不指定，沿用当前目录
+#   何时要动: ctest 这类必须在构建目录内运行的测试
+TEST_WORKDIR = TEST_BUILD_DIR
+
+# [常用] 内存检查执行的指令
+#   推导: 留空＝取 TEST_COMMAND
+#   何时要动: 测试指令是 ctest/make 这类驱动时，改指具体测试程序
+MEMCHECK_COMMAND = TEST_COMMAND
+
+
+# ---- 范围与禁改区
+
+# [常用] "哪些算本项目"：project 与 excluded 两组路径，excluded 优先
+#   推导: 留空＝报错（旧名 WHITELIST/BLACKLIST 仍可用并提示一次）
+#   何时要动: 首次接入；外部依赖与生成代码目录进 excluded
+# excluded 没排除构建目录时，构建产物里的代码会被当成项目自己的。
+# 迁移到 SCOPE 后可以删掉 WHITELIST/BLACKLIST。
+SCOPE = {
+    "project": [ROOT / "src", ROOT / "include"],
+    "excluded": [ROOT / "third_party", ROOT / "build"],
+}
+
+# [常用] 禁改区：ci 侧绝不可删、standardize 侧绝不可写的路径
+#   推导: 缺省空＝不禁改
+#   何时要动: 静态链接的 vendored 冻结库目录
+FROZEN = []
+
+# [调参] SCOPE.project 的旧名，保留兼容
+#   推导: 未写 SCOPE 时回落到它，写了只提示一次
+#   何时要动: 老配置迁到 SCOPE 的过程中
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+WHITELIST = []
+
+# [调参] SCOPE.excluded 的旧名，保留兼容
+#   推导: 未写 SCOPE 时回落到它，写了只提示一次
+#   何时要动: 老配置迁到 SCOPE 的过程中
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+BLACKLIST = []
+
+
+# ---- 内部面边界（boundary）
+
+# [调参] 受管源目录：其下检查 detail:: 归属与头文件宏守卫
+#   推导: 留空＝不做这项检查
+#   何时要动: 有 internal 分层纪律的工程
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+
+# [调参] 允许出现 detail:: 的目录
+#   推导: 留空＝任何地方出现 detail:: 都判违规
+#   何时要动: 有 internal 分层纪律的工程
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+
+# [调参] 归属标记的写法
+#   推导: 缺省 "detail::"
+#   何时要动: 工程的内部命名空间习惯不同时
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+
+# [调参] 需要检查宏守卫的头文件扩展名
+#   推导: 缺省 .h/.hh/.hpp/.hxx
+#   何时要动: 工程用别的头文件后缀时
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+GUARD_EXTS = [".h", ".hh", ".hpp", ".hxx"]
+
+
+# ---- 内存检查
+
+# [常用] 内存检查路线：valgrind（深度归因）或 asan（快，适合日常）
+#   推导: 缺省 valgrind
+#   何时要动: 日常跑 asan、合入门禁跑 valgrind 时
+
+# [常用] 归因口径：project 只把域内的算失败，all 全量计入
+#   推导: 缺省 project
+#   何时要动: 沿用旧配置名的工程迁过来时；注意 all 会连外部库的存量问题一起判红
+
+# [常用] 整体忽略的泄漏类别
+#   推导: 缺省取 valgrind 模块的 DEFAULT_IGNORE_KINDS
+#   何时要动: 某类别的分类随时序抖动、门禁红绿翻脸时
+# possibly-lost 在含定时器/异步事件循环的测试里随时序漂移，
+# 真正确凿的泄漏由 definitely-lost / invalid-* / uninit-* 兜住。
+MEMCHECK_IGNORE_KINDS = ["still-reachable", "possibly-lost"]
+
+# [调参] 重复运行次数，取交集判定：每次都判域内的才算失败
+#   推导: 缺省 1
+#   何时要动: 测试含定时器/异步、结果抖动时设 2；温
+#   动完怎么验证: 把 MEMCHECK_REPEAT 临时改成 3 再跑一次 memcheck，抖动的条目会自己浮出来；稳定后改回 1
+# 静态链接 vendored 库的工程推荐与 MEMCHECK_IGNORE_SYMBOLS 一起配：
+# 只配 REPEAT 只压掉"这次没复现"的部分，每次都能复现的冻结库符号
+# 要靠 IGNORE_SYMBOLS 摘出去，缺一不可。
+MEMCHECK_REPEAT = 1
+
+# [调参] 符号级忽略（去修饰符号前缀，如 "NormalButton::"）
+#   推导: 缺省空
+#   何时要动: 静态链接 vendored 库、帧归属落在项目自己的产物上时
+#   动完怎么验证: 改完重跑 memcheck，确认域内问题数下降且没有把项目自己的符号一起忽略掉
+# 前缀清单从摘要的"域内条目按符号前缀聚合 Top N"一行里抄。
+
+# [调参] 归属对象级忽略（可执行文件或库名），命中即判域外
+#   推导: 缺省空
+#   何时要动: 整个库不计入失败时
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+
+# [调参] 命中的测试目标整体不跑内存检查，汇总里标 skipped
+#   推导: 缺省空
+#   何时要动: 个别很慢或环境不适配的测试目标
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+
+# [调参] valgrind 抑制文件，可选精修
+#   推导: 缺省空；不配也能用，外部库泄漏由归因规则判域外
+#   何时要动: 归因规则不够用、需要写抑制 DSL 时
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+
+# [调参] 自动探测外部代码根（cmake 缓存前缀、QT_INSTALL_LIBS、/usr/lib*）
+#   推导: 缺省 True
+#   何时要动: 探测误伤了项目自己的库时关掉
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+
+# [调参] asan 路线的影子构建目录（asan 不编译主产物）
+#   推导: 缺省 BUILD_DIR/tests_asan
+#   何时要动: asan 产物要放在别处时
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+
+# [调参] asan 路线执行的测试指令
+#   推导: 缺省由 MEMCHECK_COMMAND 换 BUILD_DIR 前缀推导
+#   何时要动: 要另指别的程序时（如 [ASAN_BUILD_DIR / "run_tests"]）
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+
+# [调参] 注入影子构建的编译参数
+#   推导: 缺省 -fsanitize=address -fno-omit-frame-pointer
+#   何时要动: 需要额外的净化器选项时
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+ASAN_CXXFLAGS = ["-fsanitize=address", "-fno-omit-frame-pointer"]
+
+# [调参] 注入影子构建的链接参数
+#   推导: 缺省 -fsanitize=address
+#   何时要动: 需要额外的净化器链接选项时
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+ASAN_LDFLAGS = ["-fsanitize=address"]
+
+# [调参] 通道 B（泄漏扫描）追加的参数，用来只跑无 GUI 用例
+#   推导: 缺省空
+#   何时要动: Qt GUI 测试被 LSan 收尾扫描打成 fatal 时（如 ["--no-gui"]）
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+
+# [调参] 通道 B 的泄漏抑制清单，切到 asan 前必须先落一份
+#   推导: 缺省空；asan 路线缺清单会直接终止（ASAN_SUPPRESSIONS_MISSING）
+#   何时要动: 启用 asan 路线时
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+
+# [调参] 内存类指纹：命中即判失败，任何 xfail 登记都不豁免
+#   推导: 缺省覆盖常见 ASan/LSan 指纹
+#   何时要动: 新版本 Asan 的输出格式变化时
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+ASAN_ERROR_MARKS = [
+    "ERROR: AddressSanitizer", "ERROR: LeakSanitizer",
+    "SUMMARY: AddressSanitizer", "SUMMARY: LeakSanitizer",
+    "Direct leak", "Indirect leak", "heap-use-after-free",
+    "heap-buffer-overflow", "double-free", "SEGV on unknown address",
+]
+
+
+# ---- 已登记问题
+
+# [常用] 已登记存量问题的清单
+#   推导: 缺省 ROOT/ci.xfail（文件不存在等于没有清单）
+#   何时要动: 首次接入，把存量问题一次性落成基线时
+
+# [调参] 登记项已修复或复核到期即判失败，防止清单腐化
+#   推导: 缺省 False
+#   何时要动: 想强制清理已修的登记项时
+#   动完怎么验证: 打开后重跑，已修复的登记项会被点名——那是该清理清单了
+
+
+# ---- 输出
+
+# [常用] 成功阶段回显的诊断门槛 off/note/warning/error
+#   推导: 缺省 error
+#   何时要动: 想让告警也上屏时
+
+# [常用] 诊断归属：project 只显示项目自身的，all 连第三方头一并显示
+#   推导: 缺省 project
+#   何时要动: 需要排查第三方头文件的问题时
+
+# [调参] 命中即静默的诊断正则
+#   推导: 缺省空
+#   何时要动: 屏蔽工具或第三方库的固定噪声
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+
+# [调参] 同一条诊断只显示一次，行尾标注出现次数
+#   推导: 缺省 True
+#   何时要动: 想看逐条输出时关掉
+#   动完怎么验证: 关掉重跑，同一条诊断重复出现的次数会显出来
+
+# [调参] 失败阶段的输出：summary 先列失败清单，full 全量倾倒
+#   推导: 缺省 summary
+#   何时要动: 需要完整原文时
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+
+# [调参] 测试报告适配器 auto/gtest/qtest/catch2/regex/exit-code
+#   推导: 缺省 auto，按序试探首个命中的指纹
+#   何时要动: 自研 runner 用 regex，或只看退出码用 exit-code
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+
+# [调参] regex 适配器识别失败行的正则
+#   推导: 缺省空
+#   何时要动: 用 regex 适配器时
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+
+# [调参] regex 适配器识别总数行的正则
+#   推导: 缺省空
+#   何时要动: 用 regex 适配器时
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+
+# [常用] 阶段完整输出的落盘目录，控制台被过滤的内容都能在这里查到
+#   推导: 缺省 BUILD_DIR/ci-logs（clean 会清空构建目录但保留该目录）
+#   何时要动: 日志要放别处、或与构建产物分离时
+CI_LOG_DIR = BUILD_DIR / "ci-logs"
+
+# [调参] 注入测试子进程的环境变量
+#   推导: 缺省空
+#   何时要动: GUI 项目无头运行需要 QT_QPA_PLATFORM=offscreen 时
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+
+# [调参] 注入内存检查子进程的环境变量
+#   推导: 缺省继承 TEST_ENV
+#   何时要动: 内存检查需要不同环境时
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+
+# [常用] ci.py 默认跑哪些阶段，None 表示全部
+#   推导: 缺省 None
+#   何时要动: 某台机器上有些阶段本就跑不了（如无 clang 的 el6）时列出来
+# 例: STEPS_DEFAULT = ["clean", "build", "build_test",
+#                      "run_test", "memcheck"]
+
+
+# ---- 源码编码（source）
+
+# [常用] 改写源码时的编码判定
+#   推导: 缺省 "utf-8"＝只认 UTF-8（含 BOM），判定不出的文件一律只读
+#   何时要动: 老编码工程（GBK/GB18030）写编码名，或写 "auto" 启用候选列表
+
+# [调参] 候选编码列表，仅 SOURCE_ENCODING="auto" 时启用
+#   推导: 缺省空＝不猜 GBK
+#   何时要动: 老编码工程且不确定具体编码时
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+# 猜错比跳过危险得多——跳过只是不排版，猜错是把中文注释永久写坏。
+
+
+# ---- 配置审计（audit）
+
+# [调参] 除工具自身外还要审计的项目文件（相对 ROOT 的 glob）
+#   推导: 缺省空
+#   何时要动: 项目自己的脚本也要受配置纪律约束时
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+
+# [调参] 编译标准的承载变量（qmake 按 mkspec 二选一）
+#   推导: 缺省空＝不做这项检查
+#   何时要动: 工程用 STD_PIN 钉住编译标准时
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+
+# [调参] 编译标准的锁定值，可写成 "变量名=取值"
+#   推导: 缺省空＝不锁
+#   何时要动: 防止别处的 -std= 覆盖全局标准时
+#   动完怎么验证: 改完重跑一次门禁（run_all.sh），确认结论与预期一致
+# 动机是真实事故：.pro 注释里写的 -std= 示例曾被 qmake 静默当真。

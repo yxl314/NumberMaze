@@ -1,0 +1,121 @@
+# =============================================================================
+# TrCDBurnForLinux C/C++ 排版规范
+# 基准: Source/UIController 头文件的主流排版风格(经 clang-format 17 全量实测校准)
+# 使用: clang-format -i <file> 或 clang-format --style=file <file>
+# =============================================================================
+---
+Language: Cpp
+
+# -----------------------------------------------------------------------------
+# 基础:4 空格缩进、禁用 Tab、行宽 120(现有代码正文最长约 118 列)
+# -----------------------------------------------------------------------------
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 120
+
+# 类内 public/private 等访问修饰符顶格,成员缩进 4 格
+AccessModifierOffset: -4
+
+# -----------------------------------------------------------------------------
+# 大括号:函数/类/结构体/枚举/控制语句的左大括号一律另起一行(Allman 风格)
+# 证据: UIController 全部 73 处类/结构体定义及全部内联函数均如此书写
+# -----------------------------------------------------------------------------
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: true
+  AfterStruct: true
+  AfterUnion: true
+  AfterFunction: true
+  AfterEnum: true
+  AfterNamespace: true
+  AfterControlStatement: Always   # if/for/while 必须换行加 braces(库中无样本,与整体风格统一)
+  AfterCaseLabel: true
+  AfterExternBlock: true
+  BeforeCatch: true
+  BeforeElse: true
+  BeforeLambdaBody: true
+  BeforeWhile: true
+  IndentBraces: false
+  SplitEmptyFunction: false       # 允许 TableRow(){} 这类空函数体保持单行
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: false
+
+# -----------------------------------------------------------------------------
+# 指针/引用:星号、& 紧跟类型名(左对齐)
+# 证据: UIController 中 "TreeNode* name" 左贴写法约 353 处,远多于右贴
+# -----------------------------------------------------------------------------
+PointerAlignment: Left
+DerivePointerAlignment: false
+
+# -----------------------------------------------------------------------------
+# 声明列对齐:同类连续的声明(方法/成员/私有 helper 等)按最长类型名补齐列,
+# 跨空行与 /// 或 // 注释仍视为同一组,以复刻手工竖向对齐的观感(整块类体对到同一列)
+# 注意: clang-format 无法恢复行尾注释的列对齐,行尾注释会统一保留 1 个空格
+# -----------------------------------------------------------------------------
+AlignConsecutiveDeclarations:
+  Enabled: true
+  AcrossEmptyLines: true
+  AcrossComments: true
+
+# -----------------------------------------------------------------------------
+# 赋值列对齐:同组连续的赋值(含带初值的声明与枚举值列表)按最长左值补齐 `=` 列;
+# 跨空行与注释仍视为同一组,以复刻手工竖向对齐的观感(整块枚举对到同一列)
+# -----------------------------------------------------------------------------
+AlignConsecutiveAssignments:
+  Enabled: true
+  AcrossEmptyLines: true
+  AcrossComments: true
+
+# -----------------------------------------------------------------------------
+# 换行策略:超长声明在左括号后逐参数换行并与括号对齐(TableController 等文件风格)
+# -----------------------------------------------------------------------------
+AlignAfterOpenBracket: Align
+BinPackArguments: false
+BinPackParameters: false
+
+# -----------------------------------------------------------------------------
+# 单行语句:不允许省略大括号/压缩语句,保持 Allman 风格的完整块结构
+# -----------------------------------------------------------------------------
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortBlocksOnASingleLine: Never
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortEnumsOnASingleLine: false
+
+# -----------------------------------------------------------------------------
+# 预处理与 include:指令不缩进;include 保持书写顺序与分组(先项目头文件、
+# 后系统/Qt 头文件,组间空行),不自动排序
+# -----------------------------------------------------------------------------
+IndentPPDirectives: None
+IndentCaseLabels: false
+SortIncludes: false
+IncludeBlocks: Preserve
+
+# -----------------------------------------------------------------------------
+# 注释与空行:不做 reflow,保护 /// Doxygen 注释内的手工列对齐;
+# 最多保留 1 个连续空行;访问修饰符前后的空行保持原样
+# AlignTrailingComments: true(默认值)—— 行尾注释按整组对齐到统一列。
+#   注意:clang-format 没有"完全不处理注释列"的选项:
+#     true  = 一组连续行尾注释对齐到同一列(最长代码 + 1 空格);
+#     false = 每条注释压到各自代码后 1 空格(手工对齐会被压散,勿改)。
+# -----------------------------------------------------------------------------
+ReflowComments: false
+AlignTrailingComments: true
+SpacesBeforeTrailingComments: 1
+MaxEmptyLinesToKeep: 1
+KeepEmptyLinesAtTheStartOfBlocks: true
+EmptyLineBeforeAccessModifier: Leave
+
+# -----------------------------------------------------------------------------
+# 其它空格细节
+# -----------------------------------------------------------------------------
+BreakConstructorInitializers: BeforeColon
+ConstructorInitializerIndentWidth: 4
+SpaceBeforeCtorInitializerColon: false    # 形如 LayoutNode(ELayoutType type):layoutType(type)
+SpaceBeforeInheritanceColon: true         # 形如 class CardComboBox : public QComboBox
+SpaceBeforeParens: ControlStatements
+SpaceAfterCStyleCast: false
+Cpp11BracedListStyle: true

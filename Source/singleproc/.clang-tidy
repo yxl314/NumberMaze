@@ -1,0 +1,303 @@
+# =============================================================================
+# C++ 静态检查与命名规范配置(clang-tidy 17 实测校准)
+#
+# 命名规范(按团队约定;每格均有 clang-tidy 17 行为实测背书):
+#   宏                    【豁免,一律不检查】  宏名 + 宏体内声明的名字都放开(见"宏豁免")
+#   类/结构体/枚举        PascalCase          CardComboBox, TreeContainer, Position
+#   枚举值                PascalCase          Position::Top (历史混用风格列入豁免白名单)
+#   全局变量              g_ + lower_snake    g_instance, g_max_retry
+#   静态变量              s_ + lower_snake    s_registry, s_units(语义范围=【函数内 static】,见工具边界 1)
+#   类成员变量            m_ + lower_snake    m_main_layout, m_roots(类数据成员必须 private/protected)
+#   结构体字段            t_ + lower_snake    t_type, t_title(结构体字段一律 public,按 PublicMember 检查)
+#   局部变量            裸 lower_snake 为基线(工具不强制、绝不加前缀);
+#                       _ + lower_snake 为临时值惯例(人为维护);
+#                       工具拦 m_/t_/v_/g_/s_ 五类跨类前缀误用(报错,人工去前缀)
+#   函数参数              v_ + lower_snake    v_parent, v_icon_path
+#       (catch 形参、range-for 变量在 clang 眼里是【局部】,不写 v_)
+#   命名空间              全小写单词          notify, logger(内部实现层统一叫 detail)
+#   函数/成员方法/信号/槽 lower_snake,【无需 tr_ 前缀】
+#       说明:tr_ 前缀不是规范要求,新代码不必添加;库内存量 tr_xxx 名称
+#       本身满足 lower_snake 规则,依然合法,是否改名由团队自行决定。
+#
+# 工具边界(实测得出,别跟工具较劲;违反其中任一条,门禁会长期红且无人能修):
+#   1) Static* kind 只覆盖【函数内 static】。文件级 static 与类静态数据成员被 clang
+#      归入 GlobalVariable → 只能 g_。本仓已拍板接受此边界:要 s_ 语义就把 static 写进函数体。
+#   2) 无"结构体字段"kind → t_/m_ 靠【访问级别】代理(结构体字段全 public、类数据成员
+#      全 private/protected)。出现"类里 public 数据成员"即被判 t_,那正是违规信号。
+#   3) constexpr 只有单一 ConstexprVariable kind,全局与函数内 constexpr 同桶 → 按【全局 g_】
+#      口径;实测改按局部禁前缀会误伤 16 处配置常量、52 条诊断(每 TU 各报一次)。
+#   4) 函数内 static constexpr 完全不在 clang 检查面内(两种配法都漏,实测),由评审把关。
+#   5) 宏豁免是局部规则成立的【前提】而非便利项:TRACE_SCOPE→v_trace_scope、
+#      TEST_REGISTER→g_test_registrar_* 这类宏生成的名字天然带前缀,靠 IgnoreMacros 隔离。
+#
+# 防回退:以上口径由 cxx_ci 的配置指纹表逐项钉死。改规范的顺序:
+#   改配置 → 改本文件 → 跑命名指纹检查 → 存量改名。
+#   规范曾落地为 s_,29 分钟后被一次 SVN 回流静默改回 g_,一个月无人发现——
+#   所以这次让机器守规则,不靠注释。
+# =============================================================================
+---
+#   -readability-convert-member-functions-to-static 禁用理由(8.1 校准):本仓方法/槽
+#     经 moc 注册、QTest::qExec 持实例指针调用,"改 static"与 Qt 槽与 QTest 夹具契约
+#     冲突;clang-tidy 17 不识别 moc,无法只在测试端豁免(If: 键 17 不支持),故整体禁用。
+#   -performance-no-int-to-ptr 禁用理由:Qt5.6 Q_DECLARE_METATYPE 宏展开固定生成
+#     reinterpret_cast<TYPE*>(quintptr(-1)),源头在 Qt 头内非本仓可改,凡声明元类型
+#     必误报,故整体禁用(真·整型转指针的业务代码由 code review 把关)。
+# Qt5.6 qjsonvalue.h 内部前置 class Entry 与仓内 FileList::Entry 同名,该检查跨命名空间
+# 配对误报且诊断点在 Qt 头内不可改(定义真实存在,编译即证明),整体禁用。
+# 冻结库漏初始化(禁改区)的 analyzer 检查:诊断点随构造调用点报在本仓 .cpp 上,
+# header-filter 拦不住;上游修复后可回收末行豁免。
+Checks: >
+  clang-analyzer-*,
+  bugprone-*,
+  performance-*,
+  readability-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-exception-escape,
+  -bugprone-narrowing-conversions,
+  -bugprone-forward-declaration-namespace,
+  -readability-magic-numbers,
+  -readability-identifier-length,
+  -readability-function-cognitive-complexity,
+  -readability-function-size,
+  -readability-implicit-bool-conversion,
+  -readability-redundant-access-specifiers,
+  -readability-uppercase-literal-suffix,
+  -readability-non-const-parameter,
+  -readability-make-member-function-const,
+  -readability-convert-member-functions-to-static,
+  -performance-no-int-to-ptr,
+  -clang-analyzer-optin.cplusplus.UninitializedObject
+
+# 只报告/修复本仓可改源码的头文件诊断,屏蔽第三方/系统头噪音。
+# 冻结库(禁改区)的风格是库方既定事实且项目不可改——检查其头文件=门禁永久红
+# 且无人能修,更严重的是 --apply 会把改名/排版直接写进冻结库(诊断可见即可修),
+# 故一律从 HeaderFilter 移除,与系统头同等对待;边界由 boundary 阶段/评审钉守:
+# 只许 include 使用。
+# 唯一事实源:cxx_ci 的 TIDY_HEADER_FILTER,tidy 侧会以 --header-filter 命令行
+# 强制覆盖本值(防本文件被改出逃逸);本行保持同值仅为独立运行 clang-tidy 时兜底。
+HeaderFilterRegex: 'include/singleproc/.*'
+
+# clang-tidy 的 fix-it 应用时复用本仓库的 .clang-format
+FormatStyle: file
+
+CheckOptions:
+  # -------------------------------------------------------------------------
+  # 宏:【整体豁免,不做任何命名检查】
+  #   MacroDefinitionCase 已删除——宏名形态不限(MY_MACRO / my_macro 都不报)。
+  #   理由:宏在本仓是语法扩展而非取值糖——TRACE_SCOPE(x) 造出局部 v_trace_scope、
+  #   RESTORE_TRACE_SCOPE 造出 v_restore_link、TEST_REGISTER 造出 g_test_registrar_*,
+  #   宏名与宏体内声明的标识符必然混用各类前缀,检查只会产生与规范无关的噪音。
+  #   IgnoreMacros=true 必须保留:它屏蔽【宏展开】产生的标识符,使宏生成的局部名
+  #   不被"局部禁五前缀"牵连——这是局部规则在本仓成立的前提,不是可选项。
+  #   代价(已知并接受):宏体内声明的名字永久游离于命名门禁之外,由评审把关;
+  #   实测自动改名也无法安全改宏(漏改 #ifdef 条件名 → 静默逻辑破坏)。
+  # -------------------------------------------------------------------------
+  - key: readability-identifier-naming.IgnoreMacros
+    value: 'true'
+
+  # 命名改名一律人工:clang-tidy 17 的 identifier-naming【没有】FixIt 开关(实测
+  # 每 kind 仅 Case/Prefix/Suffix/IgnoredRegexp),-fix 只要产出 fix-it 必执行改名,
+  # 且实测只对违规名盲目前缀叠加、从不脱前缀(v_foo → _v_foo、g_x → s_g_x 垃圾)。
+  # 两道防线(均在 tidy 侧):风格修复以 CLI --checks 覆盖配置、末尾追加
+  # -readability-identifier-naming 整体关闭本检查;命名修复用派生配置把
+  # 【局部/静态/constexpr】这些"修复动作是去前缀"的 kind 前缀清空,只让工具做
+  # 加前缀类改名(全局 g_/成员 m_/t_/参数 v_),去前缀一律人工。
+  # 门禁模式不受影响,命名告警照常报告。手跑裸 clang-tidy -fix 注意。
+
+  # -------------------------------------------------------------------------
+  # 类型命名:PascalCase(类名与文件名一致,如 CardComboBox.h -> class CardComboBox)
+  # -------------------------------------------------------------------------
+  - key: readability-identifier-naming.ClassCase
+    value: CamelCase
+  - key: readability-identifier-naming.StructCase
+    value: CamelCase
+  - key: readability-identifier-naming.UnionCase
+    value: CamelCase
+  - key: readability-identifier-naming.EnumCase
+    value: CamelCase
+  - key: readability-identifier-naming.TypedefCase
+    value: CamelCase
+  - key: readability-identifier-naming.TypeAliasCase
+    value: CamelCase
+
+  # -------------------------------------------------------------------------
+  # 枚举值命名:PascalCase(如 Position::TopLeft, MessageBoxType::Warning)
+  # 豁免存量历史风格:全大写(VLAYOUT/ITEM_WIDGET)、e_ 前缀(e_string)、
+  # 枚举名_值 前缀(Theme_auto/Window_Close 等)
+  # 注意:clang-tidy 用 POSIX ERE,不支持 \w,需写显式字符类 [A-Za-z0-9_]
+  # -------------------------------------------------------------------------
+  - key: readability-identifier-naming.EnumConstantCase
+    value: CamelCase
+  - key: readability-identifier-naming.EnumConstantIgnoredRegexp
+    value: '^([A-Z][A-Z0-9_]*|e_[A-Za-z0-9_]+)$'
+  - key: readability-identifier-naming.ScopedEnumConstantCase
+    value: CamelCase
+  - key: readability-identifier-naming.ScopedEnumConstantIgnoredRegexp
+    value: '^([A-Z][A-Z0-9_]*|e_[A-Za-z0-9_]+)$'
+
+  # -------------------------------------------------------------------------
+  # 全局变量命名:g_ + lower_snake_case
+  # 覆盖:普通全局变量、const 全局、指针类,以及 clang 归进本类的【文件级 static】
+  #   与【类静态数据成员】(实测二者都不被认作 static,无法用 s_ 区分——见顶部边界 1)
+  # -------------------------------------------------------------------------
+  - key: readability-identifier-naming.GlobalVariableCase
+    value: lower_case
+  - key: readability-identifier-naming.GlobalVariablePrefix
+    value: g_
+  - key: readability-identifier-naming.GlobalConstantCase
+    value: lower_case
+  - key: readability-identifier-naming.GlobalConstantPrefix
+    value: g_
+  - key: readability-identifier-naming.GlobalPointerCase
+    value: lower_case
+  - key: readability-identifier-naming.GlobalPointerPrefix
+    value: g_
+  - key: readability-identifier-naming.GlobalConstantPointerCase
+    value: lower_case
+  - key: readability-identifier-naming.GlobalConstantPointerPrefix
+    value: g_
+
+  # -------------------------------------------------------------------------
+  # 静态变量命名:s_ + lower_snake_case —— 语义范围【仅函数内 static】
+  #   (Meyers 单例、函数内 static const / static 指针 / static 数组全在此列)
+  # 四个 kind 必须【全部显式配置】,少一个就有一类声明整条漏检:实测只配
+  #   StaticVariable 时,const/指针/数组形态的函数内 static 会静默通过。
+  #   这些 key 不在 clang-tidy --dump-config 输出里,但确实生效——能力只能靠
+  #   行为探针确认,不能信 dump。
+  # 文件级 static 与类静态数据成员属 GlobalVariable,按 g_ 检查(已拍板接受的边界)。
+  # -------------------------------------------------------------------------
+  - key: readability-identifier-naming.StaticVariableCase
+    value: lower_case
+  - key: readability-identifier-naming.StaticVariablePrefix
+    value: s_
+  - key: readability-identifier-naming.StaticConstantCase
+    value: lower_case
+  - key: readability-identifier-naming.StaticConstantPrefix
+    value: s_
+  - key: readability-identifier-naming.StaticPointerCase
+    value: lower_case
+  - key: readability-identifier-naming.StaticPointerPrefix
+    value: s_
+  - key: readability-identifier-naming.StaticConstantPointerCase
+    value: lower_case
+  - key: readability-identifier-naming.StaticConstantPointerPrefix
+    value: s_
+
+  # -------------------------------------------------------------------------
+  # constexpr 命名:全局口径 g_,但豁免"局部合法形态"
+  # clang 不区分"全局 constexpr"与"函数内 constexpr",同属 ConstexprVariable 一个
+  # kind,两条规则只能折中。IgnoredRegexp 取【并集】= g_ 形态 ∪ _ 形态 ∪ 裸名:
+  #   保住"函数内 constexpr 有合法写法"(否则局部常量被迫写 g_,反而违反局部规则);
+  #   仍拦 m_/t_/v_/s_ 串类误用(不在并集里 → 报)。
+  # -------------------------------------------------------------------------
+  - key: readability-identifier-naming.ConstexprVariableCase
+    value: lower_case
+  - key: readability-identifier-naming.ConstexprVariablePrefix
+    value: g_
+  - key: readability-identifier-naming.ConstexprVariableIgnoredRegexp
+    value: '^(g_[a-z0-9_]*|_[a-z0-9_]*|([^gmstv]|[gmstv][^_])[a-z0-9_]*|[gmstv])$'
+
+  # -------------------------------------------------------------------------
+  # 成员命名:类成员 m_ / 结构体字段 t_(按访问级别近似区分)
+  # clang-tidy 无"结构体成员"独立 kind,类与结构体成员同按访问级别归类,近似方案:
+  #   结构体字段一律 public      -> PublicMemberPrefix    = t_
+  #   类数据成员必须 private/protected -> Protected/PrivateMemberPrefix = m_
+  # 纪律:类不得出现 public 数据成员(评审/门禁把关;出现即按 t_ 检查,即为违规信号)。
+  # -------------------------------------------------------------------------
+  - key: readability-identifier-naming.PublicMemberCase
+    value: lower_case
+  - key: readability-identifier-naming.PublicMemberPrefix
+    value: t_
+  - key: readability-identifier-naming.ProtectedMemberCase
+    value: lower_case
+  - key: readability-identifier-naming.ProtectedMemberPrefix
+    value: m_
+  - key: readability-identifier-naming.PrivateMemberCase
+    value: lower_case
+  - key: readability-identifier-naming.PrivateMemberPrefix
+    value: m_
+
+  # -------------------------------------------------------------------------
+  # 局部变量命名策略:工具不规定形态,只拦五类前缀误用(m_/t_/v_/g_/s_)
+  #   合法形态(IgnoredRegexp 整体豁免——不报错、门禁零噪音):
+  #     裸 lower_snake(foo / bar_baz);_ + lower_snake(_tmp,临时值惯例,人为维护)。
+  #   拦截形态:m_/t_/v_/g_/s_ 是成员/结构体字段/参数/全局/静态五类的前缀,出现在
+  #     局部变量即串类误用 → 命中 Prefix=_ 检查被报。修复=人工去掉前缀(改裸名或 _ 前缀)。
+  #   注意 Prefix=_ 在此只当【过滤器】用,不是形态要求——能走到检查的只剩
+  #     "带 _ 前缀"(通过)与"带五类前缀"(违规)两种幸存名。
+  #   IgnoredRegexp(POSIX ERE 无先行否定,按分支拆解):
+  #       [^gmstv]…  = 常规名;
+  #       [gmstv][^_]… = g/m/s/t/v 开头但第二字符非下划线的普通词(mutex/value/token/size/get);
+  #       ^[gmstv]$  = 单字母名。n_x 等其它两字母前缀不在禁用清单,天然豁免。
+  # 四个 kind 一个不能少:LocalConstantPointer(const T* const 局部)不在 --dump-config
+  #   里但独立生效,漏配它 = 给"局部禁前缀"开后门(const QString* const v_x 直接隐身)。
+  # catch 形参与 range-for 变量归本类(不是 Parameter),同样不得写 v_;lambda 形参归 Parameter。
+  # Parameter(参数,保持 v_)与 LocalVariable 是独立 kind,互不影响。
+  # -------------------------------------------------------------------------
+  - key: readability-identifier-naming.LocalVariableCase
+    value: lower_case
+  - key: readability-identifier-naming.LocalVariablePrefix
+    value: _
+  - key: readability-identifier-naming.LocalVariableIgnoredRegexp
+    value: '^([^gmstv]|[gmstv][^_])[a-z0-9_]*$|^[gmstv]$'
+  - key: readability-identifier-naming.LocalConstantCase
+    value: lower_case
+  - key: readability-identifier-naming.LocalConstantPrefix
+    value: _
+  - key: readability-identifier-naming.LocalConstantIgnoredRegexp
+    value: '^([^gmstv]|[gmstv][^_])[a-z0-9_]*$|^[gmstv]$'
+  - key: readability-identifier-naming.LocalPointerCase
+    value: lower_case
+  - key: readability-identifier-naming.LocalPointerPrefix
+    value: _
+  - key: readability-identifier-naming.LocalPointerIgnoredRegexp
+    value: '^([^gmstv]|[gmstv][^_])[a-z0-9_]*$|^[gmstv]$'
+  - key: readability-identifier-naming.LocalConstantPointerCase
+    value: lower_case
+  - key: readability-identifier-naming.LocalConstantPointerPrefix
+    value: _
+  - key: readability-identifier-naming.LocalConstantPointerIgnoredRegexp
+    value: '^([^gmstv]|[gmstv][^_])[a-z0-9_]*$|^[gmstv]$'
+
+  # -------------------------------------------------------------------------
+  # 成员函数(含信号/槽)命名:lower_snake_case
+  # 【tr_ 前缀是无需的】—— 已移除前缀要求,新代码直接 tr 无关命名即可
+  # (如 set_badge_count / get_total_count);存量 tr_xxx 名称因本身是
+  # lower_snake 仍合法。建议信号/槽继续使用 *_signal / *_slot 后缀。
+  # 豁免:Qt 事件/元对象虚函数(paintEvent/eventFilter 等,基类签名不可改名)、
+  #       QTest 框架契约名(initTestCase/cleanupTestCase,moc 按字面名查找,
+  #       改名=夹具静默失效,实测)、内部构建函数 make_layout/connect_slots、
+  #       单例访问器 Get*Instance、初始化辅助函数 Xxx_init
+  # -------------------------------------------------------------------------
+  - key: readability-identifier-naming.MethodCase
+    value: lower_case
+  - key: readability-identifier-naming.MethodIgnoredRegexp
+    value: '^(make_[A-Za-z0-9_]+|connect_[A-Za-z0-9_]+|[A-Za-z0-9_]+_init|.*Event|event|eventFilter|metaObject|qt_[A-Za-z0-9_]+|sizeHint[A-Za-z0-9_]*|Get[A-Za-z0-9_]*Instance|tr|initTestCase|cleanupTestCase)$'
+
+  # 全局函数命名:lower_snake_case(同样【无需 tr_ 前缀】)
+  # 豁免:带大写的遗留导出 API
+  - key: readability-identifier-naming.GlobalFunctionCase
+    value: lower_case
+  - key: readability-identifier-naming.GlobalFunctionIgnoredRegexp
+    value: '^(UIController_[A-Za-z0-9_]+|Tr_[A-Za-z0-9_]+|SPACINGITEM|STRETCHITEM|LAYOUTSPACING)$'
+
+  # -------------------------------------------------------------------------
+  # 函数参数命名:v_ + lower_snake_case(v = value,即入参)
+  # 豁免:Qt 惯例的 main/QApplication 构造参数 argc/argv
+  # -------------------------------------------------------------------------
+  - key: readability-identifier-naming.ParameterCase
+    value: lower_case
+  - key: readability-identifier-naming.ParameterPrefix
+    value: v_
+  - key: readability-identifier-naming.ParameterIgnoredRegexp
+    value: '^(argc|argv)$'
+
+  # -------------------------------------------------------------------------
+  # 命名空间命名:全小写单词(notify / logger;内部实现层固定取名 detail)
+  # 约定:公开类型留在全局作用域;模块内部类型一律置于 <模块名>::detail,
+  #       且只能由该模块的私有头声明。越界使用由 boundary 阶段拦。
+  # -------------------------------------------------------------------------
+  - key: readability-identifier-naming.NamespaceCase
+    value: lower_case
+  - key: readability-identifier-naming.NamespaceIgnoredRegexp
+    value: '^(notify|detail)$'

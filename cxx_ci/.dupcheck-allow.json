@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "note": "每条必须有 why，无 why 视为未豁免。match 是一组标识子串：一条重复的标识里同时出现全部子串，即视为被本条目解释。标识的形态是路径:行（重复块）、路径:函数名（函数对）、路径（文件对）。条目若不再命中任何重复，工具报“豁免清单过期”，须一并清掉。xfail.verdict 原先不在此列（当时两侧函数体差异越过 0.82 阈值，度量没判成近似重复）；后来两侧把三态分类收进同一个 verdict，相似度回升到阈值之上，遂登记于此——它的一致性由两侧 test_xfail_parity.py 的同一场景对照承担。",
+  "entries": [
+    {
+      "kind": "file_pair + block + function_pair",
+      "match": [
+        "ci/lib/report.py",
+        "standardize/src/cxx_standardize/report.py"
+      ],
+      "why": "两项目的机器可读报告 writer 是平行实现。契约红线规定 ci 与 standardize 互不 import，不能抽共享包；两侧必须是同一 schema 与同一输出文本，一致性由两侧 test_report.py 与 CONTRACT.md §八 约束。writer 只搬运各阶段已下的结论，不承担判定，因此“像”是设计要求而不是偶然重复。"
+    },
+    {
+      "kind": "file_pair + block + function_pair",
+      "match": [
+        "ci/lib/source.py",
+        "standardize/src/cxx_standardize/source.py"
+      ],
+      "why": "源码读写（编码判定、换行、BOM 保真）在两侧各有一份平行实现，理由同上（不可抽共享包）。两侧各有 GBK/CRLF 回归测试逐条对齐行为：读不出编码/写不回原编码就不写。"
+    },
+    {
+      "kind": "file_pair + block + function_pair",
+      "match": [
+        "ci/lib/audit.py",
+        "standardize/src/cxx_standardize/audit.py"
+      ],
+      "why": "两份配置审计是同一套纪律的两遍实现，被架构约束逼成平行实现（提案 §五明确不引入第三个共享包）。差异是本侧固定的：ci 侧有 qmake/cmake 两种构建文件与 header filter，standardize 侧只有 cmake。一致性由 F3 的同固件对照测试与这张豁免表共同守住。"
+    },
+    {
+      "kind": "file_pair",
+      "match": [
+        "ci/stages/build.py",
+        "ci/stages/build_test.py"
+      ],
+      "why": "两个薄入口（26/27 行），真正的流程在 ci/lib/stage.py 与 cli 里，已经是复用的正确形态。合并成“带参数的一个脚本”会让阶段可单独调用、单独调试的性质变差——那是这套工具的立身之本（提案 §五）。"
+    },
+    {
+      "kind": "file_pair + block + function_pair",
+      "match": [
+        "ci/lib/platform.py",
+        "standardize/src/cxx_standardize/platform.py"
+      ],
+      "why": "平台支持面（级别表、判定、守卫、支持面措辞）在两侧各有一份平行实现，理由同 source/report/audit：契约红线规定 ci 与 standardize 互不 import，不能抽共享包。标准ize 侧刻意不含 memory_check_available（那侧不做内存检查），差异是设计好的。一致性由 tools/parity/platform_expected.json 这份共用定义 + 两侧 test_platform_parity.py 的对照测试钉住——测试本身不跨项目 import，只读共用 JSON，与 audit/xfail 对照同一策略。"
+    },
+    {
+      "kind": "file_pair + block + function_pair",
+      "match": [
+        "ci/lib/migrate.py",
+        "standardize/src/cxx_standardize/migrate.py"
+      ],
+      "why": "配置迁移（旧项名改名 + WHITELIST/BLACKLIST 合并成 SCOPE）在两侧各有一份平行实现，理由同 source/report/audit/platform：契约红线规定 ci 与 standardize 互不 import。两侧规则表刻意相同（同一批旧项名），一致性由两侧 test_migrate.py 的同一组用例守住：相邻单行列表自动合并、形状不齐只报告不写、dry-run 不落盘、落盘前写 .bak。"
+    },
+    {
+      "kind": "file_pair + block + function_pair",
+      "match": [
+        "ci/lib/paths.py",
+        "standardize/src/cxx_standardize/paths.py"
+      ],
+      "why": "路径包含谓词在两侧各有一份平行实现——提案 F1 第 1 条明确要求 standardize 侧建同名同实现的副本，而不是 import ci（§七 红线：收口后不得引入跨项目 import）。两侧实现刻意逐字同形，一致性由各自的 test_paths.py 对同一组软链布局断言同一结论承担。"
+    },
+    {
+      "kind": "function_pair + file_pair + block",
+      "match": [
+        "ci/lib/xfail.py",
+        "standardize/src/cxx_standardize/xfail.py"
+      ],
+      "why": "登记清单的三态分类（已修复 / 仍存在 / 新增 + 复核到期）在两侧各有一份平行实现，理由同 audit/source/report/platform：契约红线规定 ci 与 standardize 互不 import。第三态此前由各调用方各算一遍，两侧若在「新增」的呈现上分叉，对照测试看不见；现在 verdict 收下本次命中集合、三态口径回到一处，并由两侧 test_xfail_parity.py 读同一份场景数据（tools/parity/xfail_cases.json）断言四个标签集合相同。相似度回升正是这次收口的产物，不是新长出来的重复。"
+    },
+    {
+      "kind": "file_pair + block + function_pair",
+      "match": [
+        "ci/lib/probe.py",
+        "standardize/src/cxx_standardize/probe.py"
+      ],
+      "why": "两侧的平行实现，与 paths/platform/source/xfail 同例：两侧互不 import，只靠文件与命令行协作，探测口径必须在各自侧各有一份并同名同实现（例如 own_vendored_dir 认出自己那份拷贝）。一致性由两侧 test_probe.py / test_init.py 的同一组场景对照承担。"
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+# 由 cxx-standardize style --record 生成；只对新增违规判红
+[style]
+src/guard.cpp:bugprone-implicit-widening-of-multiplication-result
+src/platform/platform_posix.cpp:bugprone-implicit-widening-of-multiplication-result
+tests/test_guard.cpp:performance-unnecessary-copy-initialization

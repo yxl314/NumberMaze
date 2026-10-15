@@ -1,0 +1,10 @@
+# 可选的 pip clang 工具：clang-format / clang-tidy 自带二进制，版本由包钉定。
+#
+# 只在机器上没有系统 clang 17 时安装。安装后解析先看这两个包自带的二进制、
+# 再退回 PATH；要改用系统那一份，在配置里写 CLANG_FORMAT_BIN / CLANG_TIDY_BIN
+# 显式指定（见 standardize/config/config.py.example）。
+#
+# 由 tools/export_requirements.py 从 standardize/pyproject.toml 生成，请勿手改。
+
+clang-format==17.0.6
+clang-tidy==17.0.1

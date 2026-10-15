@@ -1,0 +1,9 @@
+# standardize 侧的开发依赖（测试与静态检查），不影响使用者。
+#
+#     pip install -r requirements/dev.txt
+#
+# 由 tools/export_requirements.py 从 standardize/pyproject.toml 生成，请勿手改。
+
+pytest>=8
+ruff>=0.6
+mypy>=1.11

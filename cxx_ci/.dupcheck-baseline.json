@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "duplicate_blocks": 0,
+  "duplicate_lines": 0,
+  "near_duplicate_functions": 0,
+  "similar_file_pairs": 0,
+  "note": "记录的是**未登记**的重复数字：能被 .dupcheck-allow.json 解释的重复不计入。任何一项大于 0 即判退化（python3 tools/dupcheck.py --check）。数字只应保持 0 或下降；新增的重复要么改掉，要么在豁免清单里写清 why。当前值全为 0，因为现有的重复块/近似函数对/相似文件对都已逐类登记理由（多来自“两项目互不 import、各自独立部署”的架构约束）。",
+  "measured": {
+    "duplicate_blocks": 19,
+    "duplicate_lines": 498,
+    "near_duplicate_functions": 17,
+    "similar_file_pairs": 7,
+    "note": "当前实测的原始数字（未扣除豁免）。与上面四项的门禁阈值不同：阈值是「扣掉已登记理由后还剩多少」，必须为 0；这里是「一共测出多少」，供与提案表格对照，看仓库随时间的漂移。"
+  },
+  "proposal_table": {
+    "duplicate_blocks": 3,
+    "duplicate_lines": 38,
+    "near_duplicate_functions": 0,
+    "similar_file_pairs": 1,
+    "note": "《改进提案3》§〇 基线表格里的数字（当时口径：≥12 行逐字重复块 3 组/冗余约 38 行/测试代码 0 对/整文件相似度 1 对 0.702）。此后新增的 platform / migrate / source / report / paths 等平行实现让数字上升；每一类都逐条登记在 .dupcheck-allow.json 里并写了 why。保留原表数字，是为了让「漂了多少、漂在哪一类」一眼可见。"
+  }
+}

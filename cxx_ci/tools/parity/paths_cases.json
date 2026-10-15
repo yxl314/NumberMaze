@@ -1,0 +1,42 @@
+{
+  "why": "两侧 paths.py 是刻意保留的平行实现（两个项目互不 import）。这份 JSON 是共用的一份定义：两侧各自的测试拿自己的实现与它比对——测试本身不跨项目 import。包含判定只允许有一个口径：默认解软链（realpath）。",
+  "normalization": "realpath",
+  "cases": [
+    {
+      "path": "/a/b/c.cpp",
+      "root": "/a/b",
+      "inside": true,
+      "why": "常规子路径"
+    },
+    {
+      "path": "/a/b",
+      "root": "/a/b",
+      "inside": true,
+      "why": "等于 root 算在内（strict=False）"
+    },
+    {
+      "path": "/a/bc/c.cpp",
+      "root": "/a/b",
+      "inside": false,
+      "why": "同名前缀但不是子路径：必须按分隔符判边界"
+    },
+    {
+      "path": "/a/bx",
+      "root": "/a/b",
+      "inside": false,
+      "why": "同上，且是同级目录"
+    },
+    {
+      "path": "/a/c/c.cpp",
+      "root": "/a/b",
+      "inside": false,
+      "why": "兄弟目录"
+    },
+    {
+      "path": "/other/c.cpp",
+      "root": "/a/b",
+      "inside": false,
+      "why": "完全无关"
+    }
+  ]
+}

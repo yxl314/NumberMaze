@@ -8,11 +8,29 @@ project(number-maze
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(CMAKE_AUTOMOC ON)
-set(CMAKE_AUTORCC ON)
+# moc/rcc 只对使用 Qt 的 target 开启，见 number-maze 目标处的 set_target_properties。
+# 不设为全局变量：全局开启会让嵌入的非 Qt 库被 moc 扫描，产生无意义的告警。
 
 # 源码根目录。集中定义一次，避免各处的路径拼接散落不一致。
-set(SOURCE_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/source/Number-naze)
+set(SOURCE_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/Source/NumberNaze)
+
+# ---------------------------------------------------------------------------
+# 外来库：单实例守卫与调用链日志
+#
+# 二者都是可独立构建安装的库，此处以子目录方式嵌入，只取库本体：
+# 关闭其测试与示例，避免把它们的自测混入本项目的测试集合。
+# 它们各自声明 C++11，本项目用 C++17；标准由各自的 CMakeLists 约束到自己的
+# target 上，不依赖全局 CMAKE_CXX_STANDARD，因此两边互不影响。
+# EXCLUDE_FROM_ALL 保证 install 只安装本项目自身的产物。
+# ---------------------------------------------------------------------------
+set(SINGLEPROC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(SINGLEPROC_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(STACKLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/Source/singleproc
+    ${CMAKE_CURRENT_BINARY_DIR}/singleproc EXCLUDE_FROM_ALL)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/Source/stacklog
+    ${CMAKE_CURRENT_BINARY_DIR}/stacklog EXCLUDE_FROM_ALL)
 
 # ---------------------------------------------------------------------------
 # Core：游戏核心，纯 C++
@@ -51,7 +69,14 @@ add_executable(number-maze
 
 target_link_libraries(number-maze PRIVATE
     number-maze-core
+    singleproc::singleproc
+    stacklog::stacklog
     Qt6::Widgets
+)
+
+set_target_properties(number-maze PROPERTIES
+    AUTOMOC ON
+    AUTORCC ON
 )
 
 # MVC 各层按目录组织，需要把各层的头文件目录都加入搜索路径，

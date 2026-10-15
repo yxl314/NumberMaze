@@ -1,0 +1,21 @@
+# 构建产物
+build/
+build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# CI 运行产物
+.cxx_ci/
+
+# 编辑器与临时文件
+*.swp
+*.tmp
+*.log
+Testing/
+
+# Python 字节码缓存
+__pycache__/
+*.py[cod]

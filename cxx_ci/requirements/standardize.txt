@@ -1,0 +1,7 @@
+# standardize 侧运行依赖（Python >= 3.11）。
+#
+#     pip install -r requirements/standardize.txt
+#
+# 由 tools/export_requirements.py 从 standardize/pyproject.toml 生成，请勿手改。
+
+PyYAML>=6.0,<7

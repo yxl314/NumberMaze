@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "note": "xfail 三态分类的同固件：一份场景（哪些项登记了、哪些本次命中、复核日期）同时喂给两侧各自的 Checklist/verdict，断言'仍存在/已修复/新增/复核到期'四个标签集合相同。两侧清单格式不同（ci 是用例名/符号前缀，standardize 是文件:检查名），因此各侧按本侧格式渲染同一份场景，再按 label 归一化比对。expected 是两个模块 docstring 里同一条规则的中性表述（命中且已登记→仍存在；已登记未命中→已修复；命中未登记→新增；复核日已过→到期），不是由某一侧的实跑生成。",
+  "today": "2026-01-01",
+  "cases": [
+    {"label": "still", "registered": true, "hit": true, "review": ""},
+    {"label": "fixed", "registered": true, "hit": false, "review": ""},
+    {"label": "expired", "registered": true, "hit": true, "review": "2000-01-01"},
+    {"label": "new", "registered": false, "hit": true, "review": ""}
+  ],
+  "expected": {
+    "still_here": ["still", "expired"],
+    "fixed": ["fixed"],
+    "new": ["new"],
+    "expired": ["expired"]
+  }
+}

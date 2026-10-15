@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cxx-standardize"
+version = "1.0.0"
+description = "C++ 代码排版与 clang-tidy 风格整理"
+requires-python = ">=3.11"
+dependencies = ["PyYAML>=6.0,<7"]
+
+[project.optional-dependencies]
+# clang 工具也可以走 pip：这两个包自带二进制，版本由包钉定，比在 PATH 上
+# 找 clang-format-17 可靠。装了就会优先用它们（见 fmt.wheel_binary）。
+clang17 = ["clang-format==17.0.6", "clang-tidy==17.0.1"]
+# 自研质量检查，只影响开发，不影响使用者
+dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11"]
+
+[project.scripts]
+cxx-standardize = "cxx_standardize.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+# RUF059：`_, code, message = ...` 是本项目的错误码风格，占位的那一位就是不用
+# EXE001：测试里的假工具由 fake_tool() 在运行时 chmod，源文件本身不需要可执行
+ignore = ["RUF059", "EXE001"]
+
+[tool.ruff.lint.per-file-ignores]
+# 版本闸与它的提示必须能被 Python 3.4 解析（老机器上直跑源码时先于一切报错），
+# 因此这里刻意用 % 格式化并保留版本判断——两条正是 UP031/UP036 要改掉的写法
+"src/cxx_standardize/__init__.py" = ["UP031", "UP036"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/cxx_standardize"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+# 两侧有同名测试文件（同固件对照测试刻意对称：test_paths / test_report /
+# test_xfail_parity / test_audit_parity）。默认导入模式按 basename 建模块，
+# 一个 pytest 进程里同时收两侧就会 import file mismatch；用 importlib 模式
+# 按完整路径建模块，两侧可以放在同一条命令里跑
+addopts = "--import-mode=importlib"
