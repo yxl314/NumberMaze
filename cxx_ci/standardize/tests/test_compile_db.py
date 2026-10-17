@@ -486,24 +486,3 @@ class TestCache:
         _path, code, message = compile_db.ensure_database(cfg, [Path(build)])
         assert Code.OK == code, message
         assert "缓存" not in message
-
-
-class TestDependencies:
-    """改动的头文件到受影响翻译单元的映射，用编译器自己的 -MM 取。"""
-
-    def test_dependency_command_swaps_dash_c_for_dash_mm(self):
-        entry = Entry(directory=Path("/b"), file=Path("a.cpp"),
-                      arguments=("g++", "-std=c++11", "-o", "a.o", "-c",
-                                 "a.cpp"))
-        command = compile_db.dependency_command(entry)
-        assert "-MM" in command
-        assert "-c" not in command
-        assert "-o" not in command
-
-    def test_missing_entry_reports_db_missing(self):
-        root = make_dir()
-        put(os.path.join(root, compile_db.DB_NAME), "[]")
-        found, code, _message = compile_db.dependencies(
-            Path(root) / "a.cpp", Path(root))
-        assert set() == found
-        assert Code.DB_MISSING == code

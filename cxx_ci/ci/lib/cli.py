@@ -91,8 +91,8 @@ def load_or_report(path=None):
         err(message)
         # 没配置时先把"这个工具怎么用"指给使用者：否则敲了一个拼错的开关，
         # 拿到的只是"找不到配置"，下一步该做什么全靠猜
-        err("（还没接入的工程先跑 `ci.py init`；用法见 `ci.py --help`，"
-            "每项配置的语义见 `ci.py --help-config`）")
+        err("（还没接入的工程先照 config-example/ci_config.py 写一份配置；"
+            "用法见 `ci.py --help`）")
     return config, code, message
 
 def stage_main(description, action, extend=None):
@@ -142,8 +142,7 @@ def help_or_version(argv, argv_source=None):
     out("cxx_ci {}（契约版本 {}）".format(__version__, CONTRACT_VERSION))
     out("")
     out("用法: ci.py [动作] [选项]")
-    out("  动作: doctor / --help-config")
+    out("  动作: doctor")
     out("  选项: --config PATH --only A,B --skip A,B --level quiet|normal|verbose")
     out("        --build-dir PATH --build-type debug|release --jobs N --timeout N")
-    out("        --report PATH --report-format json")
     return 0

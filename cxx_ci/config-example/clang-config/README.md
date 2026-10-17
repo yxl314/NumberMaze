@@ -22,7 +22,7 @@
 
 ```bash
 # 1. 复制两份 clang 配置到工程根
-cp examples/clang-config/.clang-format examples/clang-config/.clang-tidy .
+cp config-example/clang-config/.clang-format config-example/clang-config/.clang-tidy .
 
 # 2. 生成配置，再把 naming-tables.py 的片段粘进 config/standardize.py 的
 #    "命名口径"一节

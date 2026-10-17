@@ -8,7 +8,6 @@ if str(ROOT) not in sys.path:
 from lib import errors, xfail
 from ci_support import Stub
 
-TODAY = "2026-10-10"
 
 SAMPLE = """\
 # 已登记的历史遗留
@@ -38,13 +37,6 @@ class TestParse:
             "[test]\nTestMath::testSub()   # 待重构\n")
         assert errors.OK == code
         assert "TestMath::testSub()" == entries[0].value
-
-    def test_review_date_is_kept(self):
-        entries, code, _ = xfail.parse(
-            "[test]\nA.b() @2026-01-01\n")
-        assert errors.OK == code
-        assert "2026-01-01" == entries[0].review
-        assert "A.b()" == entries[0].value
 
     def test_sectionless_entries_are_inferred(self):
         """不写分段头时按形状推断：`::` 结尾或 sig: 是 memcheck，其余是 test。"""
@@ -121,41 +113,28 @@ class TestStale:
         stale = book.stale(("test",))
         assert ["TestMath::testSub()"] == [item.value for item in stale]
 
-    def test_expired_review_is_listed(self):
-        book = make("[test]\nA.b() @2020-01-01\n")
-        assert 1 == len(book.expired(TODAY))
-        assert 0 == len(book.expired("2019-01-01"))
-
-
 class TestVerdict:
     def test_no_stale_is_ok(self):
         book = make("[test]\nA.b()\n")
         book.test("A.b()")
-        code, notes = xfail.verdict(book, ("test",), False, TODAY)
+        code, notes = xfail.verdict(book, ("test",), False)
         assert errors.OK == code
         assert [] == notes
 
     def test_stale_is_reported_but_passes_by_default(self):
         book = make("[test]\nA.b()\n")
-        code, notes = xfail.verdict(book, ("test",), False, TODAY)
+        code, notes = xfail.verdict(book, ("test",), False)
         assert errors.OK == code
         assert "可移除" in notes[0]
 
     def test_strict_turns_stale_into_failure(self):
         book = make("[test]\nA.b()\n")
-        code, _ = xfail.verdict(book, ("test",), True, TODAY)
+        code, _ = xfail.verdict(book, ("test",), True)
         assert errors.XFAIL_STALE == code
-
-    def test_strict_turns_expired_into_failure(self):
-        book = make("[test]\nA.b() @2020-01-01\n")
-        book.test("A.b()")
-        code, notes = xfail.verdict(book, ("test",), True, TODAY)
-        assert errors.XFAIL_STALE == code
-        assert "复核已到期" in notes[0]
 
     def test_kinds_limit_what_can_be_judged(self):
         book = make(SAMPLE)
-        code, notes = xfail.verdict(book, ("test",), True, TODAY)
+        code, notes = xfail.verdict(book, ("test",), True)
         assert errors.XFAIL_STALE == code
         # 只判 test 时 memcheck 条目不在范围内，不该被当成"已修复"
         assert 1 == len(notes)

@@ -10,6 +10,7 @@
 import importlib.machinery
 import importlib.util
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +28,30 @@ CONFIG_NAME = "cxx_standardize_config"
 CONFIG_ENV = "CXX_STANDARDIZE_CONFIG"
 
 # 必填项：没有就给不出可用的默认值，缺了直接报错
+
+# HeaderFilter 的形状检查用这些路径做探针：它们在任何工程里都属于"别人的头
+# 文件"。正则只要能匹配上其中一条，就说明它写宽了。
+SYSTEM_PROBES = ("/usr/include/stdio.h", "/usr/local/include/x.h",
+                 "/opt/vendor/include/x.h", "/usr/lib/clang/17/include/x.h")
+
+
+def _header_filter_problem(value):
+    """TIDY_HEADER_FILTER 必须只圈住本仓头文件，返回 (错误码, 说明)。"""
+    pattern = str(value or "").strip()
+    if not pattern:
+        return Code.OK, ""
+    try:
+        compiled = re.compile(pattern)
+    except re.error as exc:
+        return Code.HEADER_FILTER_TOO_BROAD, (
+            f"TIDY_HEADER_FILTER 不是合法正则: {exc}")
+    hit = [item for item in SYSTEM_PROBES if compiled.search(item)]
+    if hit:
+        return Code.HEADER_FILTER_TOO_BROAD, (
+            "TIDY_HEADER_FILTER 写得太宽，会放行系统头文件（例如 {}）；"
+            "应写成只圈本仓的式子，如 include/<工程名>/.*".format(hit[0]))
+    return Code.OK, ""
+
 # 只列本包真正会读的项。跑构建、找构建文件是 ci 的事，这里多列一项就等于
 # 逼移植者填一个永远不生效的配置——配置审计的死配置检查会当场把它抓出来
 REQUIRED = ("ROOT", "CLANG_FORMAT_CONFIG", "CLANG_TIDY_CONFIG")
@@ -53,8 +78,6 @@ DEFAULTS: dict[str, object] = {
     "SCOPE": {},
     "FORMAT_COMMENTS": "protect",
     "TIDY_PREPARE": True,
-    "INCREMENTAL": False,
-    "INCREMENTAL_INCLUDES": True,
     "XFAIL_FILE": None,
     "XFAIL_STRICT": False,
     "CI_LOG_DIR": None,
@@ -99,8 +122,6 @@ class Config:
     scope_excluded: list[Path] = field(default_factory=list)
     format_comments: str = "protect"
     tidy_prepare: bool = True
-    incremental: bool = False
-    incremental_includes: bool = True
     xfail_file: Path | None = None
     xfail_strict: bool = False
     log_dir: Path | None = None
@@ -193,7 +214,7 @@ def _load_module(path):
     except FileNotFoundError:
         return None, Code.CONFIG_NOT_FOUND, (
             f"找不到配置文件: {path}\n"
-            f"请把 config.py.example 复制为 config.py 后按需修改")
+            f"请从 config-example/standardize_config.py 复制一份配置后按需修改")
     except SyntaxError as exc:
         return None, Code.CONFIG_UNLOADABLE, (
             f"配置文件语法错误: {path}:{exc.lineno}: {exc.msg}")
@@ -501,8 +522,6 @@ def load_config(path=None):
         blacklist=_path_list(reader, "BLACKLIST"),
         format_comments=_choice(reader, "FORMAT_COMMENTS", COMMENT_MODES),
         tidy_prepare=_flag(reader, "TIDY_PREPARE"),
-        incremental=_flag(reader, "INCREMENTAL"),
-        incremental_includes=_flag(reader, "INCREMENTAL_INCLUDES"),
         xfail_file=_absolute(reader, "XFAIL_FILE"),
         xfail_strict=_flag(reader, "XFAIL_STRICT"),
         log_dir=_absolute(reader, "CI_LOG_DIR"),
@@ -540,6 +559,9 @@ def load_config(path=None):
     # 记下的失败没人再看，配置写错却一路跑到缺省值上
     if reader.code != Code.OK:
         return None, reader.code, reader.message
+    code, message = _header_filter_problem(config.tidy_header_filter)
+    if code != Code.OK:
+        return None, code, message
     return config, Code.OK, ""
 
 

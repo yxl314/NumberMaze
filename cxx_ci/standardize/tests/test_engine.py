@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""原子改名引擎与命名口径元检查的单元测试。
+"""原子改名引擎的单元测试。
 
 这些机制的形状由实测决定：跨文件的改名必须"先收集、后一次性应用"，否则第一个
 文件改完，包含它的文件就编译不过，clang-tidy 连分析都做不了。
@@ -12,7 +12,7 @@ import yaml
 
 import pytest
 
-from cxx_standardize import audit, prefix, tidy, xfail
+from cxx_standardize import config as config_module, prefix, tidy, xfail
 from cxx_standardize.errors import Code
 
 
@@ -189,25 +189,23 @@ class TestHeaderFilterShape:
     """filter 写宽了会把系统头文件一起放进来。"""
 
     def test_too_broad_filter_is_refused(self):
-        messages = []
-        code = audit._check_header_filter(
-            Stub(tidy_header_filter="(include|src|tests)/.*"), messages)
+        code, message = config_module._header_filter_problem(
+            "(include|src|tests)/.*")
         assert Code.HEADER_FILTER_TOO_BROAD == code
-        assert messages and "系统头文件" in messages[0]
+        assert "系统头文件" in message
 
     def test_anchored_filter_passes(self):
-        assert Code.OK == audit._check_header_filter(
-            Stub(tidy_header_filter="include/singleproc/.*"), [])
+        code, _ = config_module._header_filter_problem(
+            "include/singleproc/.*")
+        assert Code.OK == code
 
     def test_empty_filter_is_not_checked(self):
-        assert Code.OK == audit._check_header_filter(Stub(), [])
+        assert Code.OK == config_module._header_filter_problem("")[0]
 
     def test_invalid_regexp_is_reported(self):
-        messages = []
-        code = audit._check_header_filter(
-            Stub(tidy_header_filter="include/(["), messages)
+        code, message = config_module._header_filter_problem("include/([")
         assert Code.HEADER_FILTER_TOO_BROAD == code
-        assert messages and "合法正则" in messages[0]
+        assert "合法正则" in message
 
 
 class TestBaseline:

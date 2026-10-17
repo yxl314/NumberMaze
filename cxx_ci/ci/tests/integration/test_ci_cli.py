@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 """ci.py 命令行行为的集成测试。"""
 
-import json
 import signal
 import os
 import sys
@@ -47,19 +46,6 @@ class TestCiCli(SandboxCase):
             "ci.py", ["--only", "clean", "--skip", "clean"])
         assert 0 != code, (out, err)
         assert "没有可执行的阶段" in (out + err), (out, err)
-
-    def test_report_path_with_comma_is_rejected(self):
-        """--report 只收一个路径。
-
-        逗号分隔的是 --report-format 的格式列表。照着带逗号的路径去建目录，
-        既不报错也不提示，使用者只会看到一份"没写出来的报告"。
-        """
-        target = os.path.join(str(self.box.path), "a.json,b.json")
-        code, out, err = self.box.run(
-            "ci.py", ["--only", "clean", "--report", target])
-        assert 0 == code, (out, err)
-        assert "只收一个路径" in err, err
-        assert not os.path.isdir(target + ","), "不该造出名字带逗号的目录"
 
     def test_passes_shared_args_through(self):
         self.box.stage("build", ECHO_ARGV)
@@ -448,80 +434,3 @@ class TestCiCli(SandboxCase):
 
 # 阶段脚本：退出码 10 = errors.status(STAGE_UNAVAILABLE)，驱动层据此标跳过
 SKIP_STAGE = "import sys\nsys.exit(10)\n"
-
-
-class TestReportCli(SandboxCase):
-    """--report / --report-format 的端到端行为。
-
-    报告是旁路产物：它必须与终端结论同源，且不改变退出码。
-    """
-
-    def _read(self, relative):
-        path = self.box.path / relative
-        with open(str(path), encoding="utf-8") as handle:
-            return json.loads(handle.read())
-
-    def test_json_report_written_and_same_source(self):
-        self.box.stage("build", PROBE_DIAG)
-        code, out, err = self.box.run(
-            "ci.py", ["--only", "build",
-                      "--report=build/ci-report.json"])
-        assert 0 == code, (out, err)
-        document = self._read("build/ci-report.json")
-        assert 1 == document["report_version"]
-        assert 3 == document["tool"]["contract"]
-        assert "build" == document["stages"][0]["name"]
-        assert "passed" == document["stages"][0]["status"]
-        # 诊断与终端同源：级别与消息都搬自同一条 #diag 协议行
-        entry = document["stages"][0]["diagnostics"][0]
-        assert "error" == entry["level"]
-        assert "告警" == entry["message"]
-        assert "src/a.cpp" in entry["file"]
-
-    def test_report_to_stdout_is_clean_json_under_quiet(self):
-        self.box.stage("build", "")
-        code, out, err = self.box.run(
-            "ci.py", ["--only", "build", "--level", "quiet",
-                      "--report"])
-        assert 0 == code, (out, err)
-        document = json.loads(out.strip())
-        assert "build" == document["stages"][0]["name"]
-        assert "passed" == document["stages"][0]["status"]
-
-    def test_report_format_is_json(self):
-        self.box.stage("build", "")
-        code, out, err = self.box.run(
-            "ci.py", ["--only", "build", "--level", "quiet",
-                      "--report=build/rep", "--report-format", "json"])
-        assert 0 == code, (out, err)
-        assert (self.box.path / "build" / "rep").is_file()
-
-    def test_skipped_stage_stays_skipped(self):
-        self.box.stage("build", SKIP_STAGE)
-        code, out, err = self.box.run(
-            "ci.py", ["--only", "build",
-                      "--report=build/ci-report.json"])
-        assert 0 == code, (out, err)
-        document = self._read("build/ci-report.json")
-        assert "skipped" == document["stages"][0]["status"]
-        assert document["stages"][0]["skipped_reason"]
-
-    def test_failing_stage_still_writes_report(self):
-        self.box.stage("build", FAIL)
-        code, out, err = self.box.run(
-            "ci.py", ["--only", "build",
-                      "--report=build/ci-report.json"])
-        assert 0 != code
-        document = self._read("build/ci-report.json")
-        assert "failed" == document["stages"][0]["status"]
-
-    def test_unknown_format_only_warns(self):
-        """格式写错只警告，不改退出码。"""
-        self.box.stage("build", "")
-        code, out, err = self.box.run(
-            "ci.py", ["--only", "build", "--level", "quiet",
-                      "--report=build/x.json", "--report-format", "yaml"])
-        assert 0 == code, (out, err)
-        assert "未知报告格式" in err
-        assert not (self.box.path / "build" / "x.json").is_file()
-

@@ -28,7 +28,6 @@ ci/
 │   ├── asan.py           asan 影子构建与双通道判定
 │   ├── stage.py          阶段的执行、落盘与展示
 │   └── xfail.py          已登记存量问题的清单
-├── config/               config.py.example
 ├── tests/                单元、集成与冒烟测试
 └── README.md
 ```
@@ -42,14 +41,10 @@ python3 ci/ci.py doctor --config config/ci.py    # 只读自检：现在生效�
 python3 ci/ci.py --config config/ci.py           # 跑门禁
 ```
 
-* **`doctor`**：四段一屏内——①环境（Python、构建工具、clang 两件套的实际路径
+* **`doctor`**：两段一屏内——①环境（Python、构建工具、clang 两件套的实际路径
   与版本、valgrind / libasan、依赖清单、**平台级别与内存检查实探测结果**）；
-  ②生效配置（关键取值 + 每项来源：配置文件 / 推导 / 缺省）；③上次结论（从报告
-  与日志读回，并汇总 standardize 侧的结论）；④下一步（可直接抄的命令）。
+  ②生效配置（关键取值 + 每项来源：配置文件 / 推导 / 缺省）。
   配置建不起来时也照常给环境段与原因。
-* **`--help-config`**：按「必需 / 常用 / 调参」三层列出每一项的语义、推导规则、
-  何时要动；调参层另给**动完怎么验证**。与 `config.py.example` 同源（都由
-  配置元数据生成），所以文档不会与实现分叉。
 首次接入建议把存量登记成基线，门禁当天变绿、以后只对新问题判红：
 `cxx-standardize --config config/standardize.py style --record`。
 
@@ -147,7 +142,7 @@ g++ 输出 `警告：` 而非 `warning:`），诊断解析依赖固定版式，�
 
 ```bash
 # 1. 把 ci/ 拷进项目（或放到项目旁边），再复制一份配置
-cp ci/config/config.py.example ci/config/config.py
+cp config-example/ci_config.py config/ci.py
 
 # 2. 改这几项：项目根、构建工具、构建文件、测试指令
 #    ROOT / BUILD_TOOL / BUILD_FILE / TEST_COMMAND / TEST_WORKDIR
@@ -183,7 +178,7 @@ python3 ci/stages/build.py --config /path/to/config.py
 | `BUILD_TOOL_BIN` | 自动探测（兼容 `cmake3` 这类带版本后缀的命名） |
 
 探测到什么会随配置的提示打出来，不静默生效。全部配置项见
-`config/config.py.example`，每一项都有说明。几个要点：
+`config-example/ci_config.py`，每一项都有说明。几个要点：
 
 - `SCOPE` 是"哪些代码算本项目"的单一来源，诊断归属、style 与 format 的
   处理范围、内存归因都走它。旧名 `WHITELIST`/`BLACKLIST` 保留可用，会
@@ -407,7 +402,7 @@ Qt GUI 事件循环会被打到 fatal——那是环境冲突，不是被测代�
   失败，防止清单腐化。
 
 清单缺省放在 `ROOT/ci.xfail`（`XFAIL_FILE` 可改位置；文件不存在等于没有
-清单）。纯文本，一行一条，`#` 起注释，行尾可写 `@YYYY-MM-DD` 作复核到期日：
+清单）。纯文本，一行一条，`#` 起注释：
 
 ```
 # 已登记的历史遗留
@@ -446,7 +441,7 @@ sig:1a2b3c4d
 由日志给出。跨进程读到的退出状态可用 `compose` 还原成错误码。
 
 几个需要区分的近邻：`XFAIL_BAD_FILE`（清单语法错误，配置问题）与
-`XFAIL_STALE`（登记项已修复或复核到期，清单该清理了）；`STAGE_UNAVAILABLE`
+`XFAIL_STALE`（登记项已修复，清单该清理了）；`STAGE_UNAVAILABLE`
 （机器上缺工具，跳过）与 `TOOL_MISSING` 之外的构建失败（代码或构建脚本问题）。
 
 ## 测试

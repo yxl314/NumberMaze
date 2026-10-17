@@ -32,10 +32,10 @@ python3 cxx_ci/standardize/standardize.py --config config/standardize.py doctor
 python3 cxx_ci/standardize/standardize.py --config config/standardize.py --apply
 ```
 
-* **配置**：照 `config/config.py.example` 抄一份到工程根，按注释改。每项的含义、
+* **配置**：照 `config-example/standardize_config.py` 抄一份到工程根，按注释改。每项的含义、
   推导规则与改动时机都写在那里。
-* **`doctor`**：四段与 ci 侧同形——环境（含平台级别与判据、`CLANG_PREFER` 生效
-  值、依赖清单校验）、生效配置（每项标来源）、上次结论、下一步。
+* **`doctor`**：两段——环境（含平台级别与判据、`CLANG_PREFER` 生效值、依赖清单
+  校验）与生效配置（每项标来源）。
 * 一次修完排版 + 风格 + 命名就用 `--apply`（缺省动作是 `all`，已包含命名；
   命名改名也在此一步，位置取自 clang-tidy、目标名按 `NAMING_PREFIX` 口径表算）。
 
@@ -58,7 +58,6 @@ cxx-standardize format --apply         # 写入排版
 cxx-standardize format --accept-baseline --yes   # 一次性切换，建立排版基线
 cxx-standardize check --jobs 16        # 并行度
 cxx-standardize check --verbose        # 透传工具自身的进度等过程噪声
-cxx-standardize check --changed-only   # 只处理改动过的文件
 cxx-standardize check --config <路径>  # 指定项目配置
 ```
 
@@ -75,7 +74,7 @@ cxx-standardize check --config <路径>  # 指定项目配置
 
 ## 配置
 
-`config/config.py`（由 `config.py.example` 复制而来）是一个 Python 模块，路径
+`config/config.py`（由 `config-example/standardize_config.py` 复制而来）是一个 Python 模块，路径
 一律写成 `ROOT / "..."`。装成包时用 `--config` 指定，或用环境变量
 `CXX_STANDARDIZE_CONFIG`。
 
@@ -85,13 +84,12 @@ cxx-standardize check --config <路径>  # 指定项目配置
 | `BUILD_TOOL` / `BUILD_FILE` / `BUILD_DIR` | 构建工具与主构建目录 |
 | `TEST_BUILD_FILE` / `TEST_BUILD_DIR` | 测试构建文件与目录 |
 | `CXX_COMPILER` / `CXX_STANDARD` | 编译器与语言标准 |
-| `CLANG_FORMAT_CONFIG` / `CLANG_TIDY_CONFIG` | 两个配置文件的位置，**必须真实存在**。现成的全量示例见 `examples/clang-config/` |
+| `CLANG_FORMAT_CONFIG` / `CLANG_TIDY_CONFIG` | 两个配置文件的位置，**必须真实存在**。现成的全量示例见 `config-example/clang-config/` |
 | `CLANG_MAJOR` | 钉定 clang 主版本；多版本共存时结果随版本变化 |
 | `CLANG_TIDY_EXTRA_ARGS` | 额外编译参数，用于屏蔽第三方头文件的已知误报 |
 | `FORMAT_COMMENTS` | 注释保护模式：`protect`（推荐）/ `none`（旧名 `protect-column`/`placeholder` 等价于 `protect`） |
 | `TIDY_PREPARE` | 分析前先生成 moc_/ui_/qrc_ 等派生文件 |
 | `VERIFY_COMMAND` | 应用风格修复后验证构建的指令；留空则跳过验证（会明确提示） |
-| `INCREMENTAL` / `INCREMENTAL_INCLUDES` | 只处理改动集；改动的头文件带出包含它的翻译单元（用编译器自己的 `-MM`，间接包含也算；只对风格检查有意义） |
 | `FROZEN` | 禁改区：`--apply` 绝不可写的路径（vendored 冻结库）。与 `BLACKLIST` 分列——黑名单是"不必分析"，这里是"绝不可写" |
 | `BOUNDARY_DIRS` / `GUARD_EXTS` | 受管源目录与需要检查宏守卫的头文件后缀 |
 | `DETAIL_DIRS` / `DETAIL_MARK` | 允许出现 `detail::` 的目录与标记写法 |
@@ -126,22 +124,15 @@ clang-tidy 靠 `compile_commands.json` 解析编译参数，缺了会把包含�
 
 ## 注释保护
 
-排版**不触碰注释**：注释先换成占位符交给 clang-format，排版后按原列号还原；
-代码越过原列时注释退一格。
+排版**不触碰注释**：先摘掉注释排代码，再用 difflib 按代码行对齐把注释回填。
+行尾注释钉回作者原来的列号；只有代码对齐后越过该列时才右移一格让开。独占一行
+的注释按原缩进挂回它下方那条代码之前。
 
-clang-format 没有**保列号**的等价能力——`AlignTrailingComments: true`（默认）会把
-手工对齐的行尾注释全部重排到最长代码行，改成 `false` 更糟（全部塌成一个空格）；
-`{Kind: Leave}`（17 与 21 都支持）保的是"代码与注释之间的间隔"而不是绝对列号，
-代码被排窄几列注释就跟着左移。这一层是自研的，也因此 `FORMAT_COMMENTS=none` 之外的模式与行级增量排版不兼容：去掉
-注释会改变行数，`--lines` 的行号会对不上。
+clang-format 没有保列号的等价能力（`AlignTrailingComments` 会重排，改成 `false`
+会塌成一个空格，`{Kind: Leave}` 保的是间隔而不是列号），因此这一层由本工具做。
 
-三种模式：
-
-| 模式 | 行为 |
-| --- | --- |
-| `protect-column` | 注释按原列还原；放不回原列时判为基线不成立，需一次性切换 |
-| `placeholder` | 同样保护注释，但允许移动列（一次性切换用这个） |
-| `none` | 完全信任 `.clang-format` |
+`FORMAT_COMMENTS`：`protect`（默认，保护注释）/ `none`（完全信任 `.clang-format`；
+旧名 `protect-column` / `placeholder` 等价于 `protect`）。
 
 ## 排版基线
 
@@ -176,8 +167,7 @@ cxx-standardize format                            # 3. 之后纳入门禁
 条数按诊断算，括号里的文件数是涉及的文件个数，两者不同：一个头文件里的一条
 检查可以命中几十处。
 
-存量违规用 `standardize.xfail` 登记（纯文本，一行一条，`#` 起注释，行尾可写
-`@YYYY-MM-DD` 作复核到期日）：
+存量违规用 `standardize.xfail` 登记（纯文本，一行一条，`#` 起注释）：
 
 ```
 [style]
@@ -191,13 +181,6 @@ Source/CDBurn/Util.cpp:120:bugprone-branch-clone   # 待重构
 
 门禁侧另有一份 `ci.xfail`（登记用例与内存符号），归另一个项目管；本项目不读
 也不解析它。
-
-## 配置审计
-
-与 `ci` 侧同构的三条只读检查，在配置加载成功后、任何动作之前跑：死配置（配置键
-从没有以 `config.键` 的形式取过值）、配置旁路（源码里的字符串常量与某个配置取值
-完全相等，docstring 不算）、编译标准锁定（`CMAKE_CXX_STANDARD` 与别处的 `-std=`）。
-被审对象是本包自身与项目配置。`--no-audit` 可跳过。
 
 ## 禁改区写保护
 
@@ -252,11 +235,10 @@ standardize/
 │   ├── compile_db.py           编译数据库：按构建系统取一份
 │   ├── incremental.py          git 改动集
 │   └── xfail.py                风格侧登记清单
-├── config/config.py.example
 ├── tests/
 └── README.md
 
-examples/clang-config/          写全了排版与命名规则的现成配置
+config-example/clang-config/          写全了排版与命名规则的现成配置
 ├── .clang-format               排版规范（可 clang-format --style=file 直接跑）
 ├── .clang-tidy                 检查开关 + 命名规则
 ├── naming-tables.py            配套的命名口径表（粘进 config/standardize.py）

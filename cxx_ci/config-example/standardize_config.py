@@ -1,4 +1,5 @@
-# 复制为 config.py 后按需修改。路径一律写成 ROOT / "..."（必须是绝对路径）。
+# 复制成工程自己的配置后按需修改（cp config-example/standardize_config.py config/standardize.py）。
+# 路径一律写成 ROOT / "..."（必须是绝对路径）。
 #
 # 本项目的配置与门禁项目 ci 各有一份：公共字段（项目根、构建目录）在两处各写
 # 一遍，语义由仓库根的 CONTRACT.md 约定。两侧不共享代码，因此这里不用去
@@ -129,13 +130,7 @@ NAMING_PREFIX = {
 # 前缀中间态交换表，形如 (("t_m_", "t_"),)。没有"m_ 迁到 t_"这类需求就留空。
 NAMING_FIX_PREFIX_SWAPS = []
 
-# ---------------------------------------------------------------- 增量与登记
-# 只处理改动过的文件。INCREMENTAL_INCLUDES 打开时，改动的头文件会带出包含它的
-# 翻译单元（靠编译器自己的 -MM 算出包含关系）；只对风格检查有意义——排版是逐个
-# 文件做的，改动的头文件本身就是待排版的文件。
-INCREMENTAL = False
-INCREMENTAL_INCLUDES = True
-
+# ---------------------------------------------------------------- 登记清单
 # 风格侧的登记清单，只登记 [style] 条目。门禁侧另有一份 ci.xfail，互不读取。
 XFAIL_FILE = None          # 缺省 ROOT / "standardize.xfail"
 XFAIL_STRICT = False       # True 时"已修复未清理"直接判失败，防止清单腐化

@@ -4,7 +4,7 @@
 #
 # 含运行依赖、可选 pip clang 工具与开发依赖（测试与静态检查），分节列出。
 #
-# 由 tools/export_requirements.py 从 standardize/pyproject.toml 生成，请勿手改。
+# 本文件手写维护，改动时与 standardize/pyproject.toml 保持一致。
 
 # --- 运行依赖 ---
 PyYAML>=6.0,<7

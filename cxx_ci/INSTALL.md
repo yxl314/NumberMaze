@@ -9,11 +9,11 @@
 `ci/` 只用标准库，**零第三方依赖**——不需要 pip，也不需要联网。
 
 1. 把 `ci/` 整个目录拷到目标机器。它是自包含的：入口 `ci.py`、`lib/`、
-   `stages/`、`config/config.py.example` 都在里面。
+   `stages/` 都在里面。
 2. 复制一份配置，放在**项目根**（别放进工具目录）：
    ```sh
    mkdir -p config
-   cp ci/config/config.py.example config/ci.py
+   cp config-example/ci_config.py config/ci.py
    ```
    按注释改 `ROOT`、`BUILD_TOOL` 等；`CONTRACT_VERSION` 保持与本工具一致，或
    干脆不写（取工具缺省）。
@@ -43,17 +43,17 @@ sudo apt-get install clang-format-17 clang-tidy-17 clang-tools-17
 ```
 
 配置放在项目根，用 `--config config/standardize.py` 指定（装成包后工具目录里
-没有 `config/`，显式指定是常态）：把 `standardize/config/config.py.example` 抄
+没有 `config/`，显式指定是常态）：把 `config-example/standardize_config.py` 抄
 过去按注释改。
 
 ## 场景三：机器上没有系统 clang 17（改用 pip 的 clang）
 
 解析顺序是"先看 pip 包自带的二进制，再退回 PATH"（见
-[standardize-clang17.txt](requirements/standardize-clang17.txt) 与
+[standardize.txt](requirements/standardize.txt) 的"可选 pip clang"节与
 `fmt.wheel_binary`）。没有系统 clang 时，用 pip 装一份：
 
 ```sh
-pip install -r requirements/standardize-clang17.txt
+pip install -r requirements/standardize.txt
 ```
 
 要改用系统那一份，在配置里写 `CLANG_FORMAT_BIN` / `CLANG_TIDY_BIN` 显式指定
@@ -71,9 +71,7 @@ pip install -r requirements/standardize-clang17.txt
 ## 开发
 
 ```sh
-pip install -r requirements/dev.txt              # pytest / ruff / mypy
+pip install -r requirements/standardize.txt      # 运行 / clang / dev 依赖
 (cd standardize && python3 -m pytest tests -q)   # 标准侧测试
 python3 ci/tests/run.py                          # 门禁侧测试
-python3 tools/dupcheck.py --check                # 重复度基线
-python3 tools/export_requirements.py --check     # 依赖清单与 pyproject 不漂
 ```

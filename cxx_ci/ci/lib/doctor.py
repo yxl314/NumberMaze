@@ -1,36 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""只读自检：回答"现在生效的是什么、上次为什么红、下一步跑什么"。
+"""只读自检：回答"现在生效的是什么"。
 
-`ci.py doctor` 用它，把接入与排障要翻的几处信息收进四段，每段控制在一屏内：
+`ci.py doctor` 用它，把接入与排障要翻的信息收进两段，每段控制在一屏内：
 
     ① 环境     Python、构建工具、clang-format / clang-tidy、valgrind / libasan
     ② 配置     关键取值 + 每项来源（配置文件 / 推导 / 缺省）
-    ③ 上次结论 从 CI_LOG_DIR 的机器报告读回，读不到就退回阶段日志的协议行
-    ④ 下一步   具体命令，而不是让人去猜配置名
 
-本模块只读：不写文件、不改判定。数据都取自既有模块（report 的 schema、
-protocol 的协议行、build / asan / tools 的探测），因此 doctor 与门禁的结论
-同源，不会自成一派。兼容 Python 3.4，只用 .format。
+本模块只读：不写文件、不改判定。数据都取自 build / asan / tools 的探测。
+兼容 Python 3.4，只用 .format。
 """
 
 import argparse
-import collections
-import glob
-import json
 import os
 import sys
 
 if sys.version_info < (3, 4):
     sys.exit("需要 Python 3.4 或更高版本，请用 python3 运行")
 
-from . import asan, build, platform, protocol, report, tools
+from . import asan, build, platform, tools
 from . import config as config_module
 from .config import (CONFIG_ENV, CONFIG_FILE, DEFAULTS, advise, load_config)
 from .errors import OK
 from .output import decode, err as _err, out as _out
 
-SECTIONS = ("① 环境", "② 生效配置", "③ 上次结论", "④ 下一步")
+SECTIONS = ("① 环境", "② 生效配置")
 
 # ② 里展示的关键项：接入与排障真正会看的那些，不是全部 55 项
 KEY_VALUES = (
@@ -243,258 +237,19 @@ def config_lines(config):
     return lines
 
 
-# ------------------------------------------------------------------ ③ 上次结论
-
-def _report_owner(document):
-    """报告是哪一侧写的：读 tool 段（CONTRACT.md 登记的字段）。
-
-    两侧共用同一个日志目录，也共用同一份报告 schema。只按 mtime 取最新的一份
-    会把对方的报告当成本侧的结论：standardize 的 style 段被列成 ci 的阶段，还会
-    给出 ci 根本不认的复跑命令（--only style）。
-    """
-    tool = document.get("tool") or {}
-    if not isinstance(tool, dict):
-        return ""
-    if str(tool.get("ci") or ""):
-        return "ci"
-    if str(tool.get("standardize") or ""):
-        return "standardize"
-    return ""
-
-
-def _load_report(directory, owner=""):
-    """CI_LOG_DIR 里最新的机器报告，返回 (路径, 文档)；没有返回 ("", None)。
-
-    只认含 report_version 的 JSON——那是 E2 的报告 schema；别的 json 一律不碰。
-    owner 非空时只收那一侧写的报告（见 _report_owner）。
-    """
-    best, stamp = ("", None), -1.0
-    if directory and os.path.isdir(directory):
-        for path in glob.glob(os.path.join(directory, "*.json")):
-            try:
-                handle = open(path, "r", encoding="utf-8")
-                try:
-                    document = json.load(handle)
-                finally:
-                    handle.close()
-            except (IOError, OSError, ValueError):
-                # 报告读不出/不是 JSON：当成"这份报告不存在"跳过。doctor 是
-                # 只读自检，不能因为一份残缺的历史报告就整体失败
-                continue
-            if not isinstance(document, dict) or "report_version" not in document:
-                continue
-            if owner and _report_owner(document) not in ("", owner):
-                continue
-            mtime = os.path.getmtime(path)
-            if mtime > stamp:
-                best, stamp = (path, document), mtime
-    return best if best[1] is not None else ("", None)
-
-
-def _diag_note(diagnostics):
-    """诊断按级别与检查名聚合，压成一行。"""
-    if not diagnostics:
-        return ""
-    levels = collections.Counter(item.get("level") or "?" for item in diagnostics)
-    checks = collections.Counter(item.get("check") or "(无名检查)"
-                                 for item in diagnostics)
-    text = "诊断 {}（{}）".format(
-        len(diagnostics),
-        "、".join("{} {}".format(key, levels[key]) for key in sorted(levels)))
-    text += "；检查名: " + "、".join(
-        "{} {}".format(name, count) for name, count in checks.most_common(3))
-    return text
-
-
-def _fail_note(failures):
-    """逐例失败按"已知登记 / 未登记"聚合。"""
-    if not failures:
-        return ""
-    known = [item for item in failures if item.get("xfail")]
-    unknown = [item.get("case") or "" for item in failures if not item.get("xfail")]
-    text = "失败 {} 例".format(len(failures))
-    if known:
-        text += "（其中已知登记(xfail) {}）".format(len(known))
-    if unknown:
-        text += "；未登记: " + "、".join(unknown[:3])
-    return text
-
-
-def _stage_line(stage):
-    """一个阶段一行：名称、状态、耗时，再接摘要与诊断/失败聚合。"""
-    head = "{:<10} {:<8} {:>6.1f}s".format(
-        stage.get("name") or "", stage.get("status") or "",
-        float(stage.get("seconds") or 0.0))
-    notes = [section for section in (
-        _clip(stage.get("summary") or "", 60),
-        _diag_note(stage.get("diagnostics") or []),
-        _fail_note(stage.get("failures") or [])) if section]
-    if notes:
-        head += "  | " + " | ".join(notes)
-    return "  " + head
-
-
-def _count_log(path):
-    """读一份阶段日志，返回 (诊断, 失败, 摘要)。"""
-    try:
-        handle = open(path, "r", encoding="utf-8", errors="replace")
-        try:
-            text = handle.read()
-        finally:
-            handle.close()
-    except (IOError, OSError):
-        return None
-    return protocol.parse(text)
-
-
-def _log_lines(directory):
-    """没有机器报告时的退路：逐阶段读日志里的协议行。"""
-    if not directory or not os.path.isdir(directory):
-        return ["没有找到 CI_LOG_DIR: " + (directory or "未配置")]
-    paths = sorted(glob.glob(os.path.join(directory, "*.log")))
-    if not paths:
-        return ["CI_LOG_DIR 下没有日志: " + directory]
-    lines = ["来源: 阶段日志（未找到机器报告）"]
-    checks = collections.Counter()
-    for path in paths:
-        name = os.path.splitext(os.path.basename(path))[0]
-        parsed = _count_log(path)
-        if parsed is None:
-            lines.append("  {:<10} 读取失败".format(name))
-            continue
-        # 协议解析后来多了"已登记"一档（#xfail），这里要一起接住
-        diagnostics, failures, _knowns, sums = parsed
-        for item in diagnostics:
-            checks[report.check_of(item.message) or "(无名检查)"] += 1
-        notes = []
-        if sums:
-            notes.append(_clip(sums[-1], 60))
-        if diagnostics:
-            notes.append("诊断 {}".format(len(diagnostics)))
-        if failures:
-            notes.append("失败 {} 例".format(len(failures)))
-        lines.append("  {:<10} {}".format(name, " | ".join(notes) or "无协议行"))
-    if checks:
-        lines.append("诊断检查名: " + "、".join(
-            "{} {}".format(key, checks[key]) for key in checks.most_common(3)
-            if key))
-    return lines
-
-
-def analyse(config, log_dir=None):
-    """③ 的数据：读回上次结论，返回 {lines, failed, unfixed}。
-
-    failed 是未通过的阶段名，供 ④ 生成"复跑哪一阶段"的具体命令。
-    """
-    directory = log_dir if log_dir is not None else (
-        getattr(config, "log_dir", "") or "")
-    path, document = _load_report(directory, owner="ci")
-    if document is None:
-        lines = _log_lines(directory)
-        failed = []
-        unfixed = 0
-        ran = False
-        for path in sorted(glob.glob(os.path.join(directory or "", "*.log"))):
-            parsed = _count_log(path)
-            if not parsed:
-                continue
-            # 协议解析后来多了"已登记"一档（#xfail），这里要一起接住
-            diagnostics, failures, _knowns, _sums = parsed
-            ran = True
-            if failures:
-                failed.append(os.path.splitext(os.path.basename(path))[0])
-            unfixed += len(diagnostics) + len(failures)
-        return {"lines": lines, "failed": failed, "unfixed": unfixed,
-                "ran": ran}
-    lines = ["来源: {}（report_version {}）".format(
-        path, document.get("report_version"))]
-    failed, unfixed = [], 0
-    for stage in document.get("stages") or []:
-        if stage.get("status") != "passed":
-            failed.append(stage.get("name") or "")
-        unfixed += (len(stage.get("diagnostics") or [])
-                    + len(stage.get("failures") or []))
-        lines.append(_stage_line(stage))
-    if len(lines) == 1:
-        lines.append("  报告里没有阶段")
-    return {"lines": lines, "failed": failed, "unfixed": unfixed,
-            "ran": bool(document.get("stages"))}
-
-
-def standardize_conclusion_lines(config, find=None):
-    """ci 汇总 standardize 的结论：它在同一份日志目录下落的报告。
-
-    两侧不 import，靠报告文件对接——报告 schema 的用途之一就是这个。
-    """
-    directory = getattr(config, "log_dir", "") or ""
-    loaded = _load_report(directory, owner="standardize")
-    # _load_report 返回 (路径, 文档)；没有报告时是 None
-    document = loaded[1] if isinstance(loaded, tuple) else loaded
-    if not document:
-        return ["standardize: 没有找到它的报告（它跑过并带 --report 才会有）"]
-    stages = [item for item in (document.get("stages") or [])
-              if item.get("name") in ("style", "format")]
-    if not stages:
-        return ["standardize: 报告里没有 style / format 段"]
-    lines = []
-    for stage in stages:
-        lines.append("  standardize/{}: {} —— {}".format(
-            stage.get("name"), stage.get("status"),
-            stage.get("summary", "")))
-    return lines
-
-
-def last_result_lines(config, analysis=None):
-    """③ 上次结论：本侧各阶段 + 另一侧（standardize）的结论。
-
-    另一侧的结论从它落的报告里读（两侧不 import，靠文件对接）。
-    """
-    lines = list((analysis or analyse(config))["lines"])
-    lines.extend(standardize_conclusion_lines(config))
-    return lines
-
-
-# ------------------------------------------------------------------ ④ 下一步
-
-def next_step_lines(config, analysis=None):
-    """④ 下一步：给出可直接抄的命令，不让人去猜配置名。"""
-    analysis = analysis or analyse(config)
-    failed = [name for name in analysis["failed"] if name]
-    lines = []
-    if failed:
-        lines.append("复跑未通过的阶段看完整诊断: python3 ci/ci.py --only {} "
-                     "--level verbose".format(",".join(failed)))
-    lines.append("查看全部配置项与推导规则: python3 ci/ci.py --help-config")
-    if failed or analysis["unfixed"] or not analysis.get("ran"):
-        # 全新工程（还没跑过）也给出这条：首次接入最该做的是把存量一次性登记成
-        # 基线，门禁当天变绿、以后只对新问题判红——而不是"先跑一天调门禁"
-        lines.append("把存量违规一次性落成基线（之后只对新问题判红）: "
-                     "cxx-standardize --config config/standardize.py "
-                     "style --record")
-    if (getattr(config, "memcheck_scope", "") == "all"
-            and getattr(config, "memcheck_repeat", 1) < 2):
-        lines.append("内存结论随时序抖动就复跑取交集: 在配置里写 MEMCHECK_REPEAT = 2")
-    for note in advise(config):
-        lines.append(note)
-    return lines
-
-
 def sections(config):
-    """doctor 的四段内容：[(标题, [行])...]。config 必须是已加载的配置。"""
-    analysis = analyse(config)
+    """doctor 的两段内容：[(标题, [行])...]。config 必须是已加载的配置。"""
     return [(SECTIONS[0], environment_lines(config)),
-            (SECTIONS[1], config_lines(config)),
-            (SECTIONS[2], last_result_lines(config, analysis)),
-            (SECTIONS[3], next_step_lines(config, analysis))]
+            (SECTIONS[1], config_lines(config))]
 
 
 # ------------------------------------------------------------------ 入口
 
 def main(argv=None):
-    """`ci.py doctor`：自行载配置，打印四段。"""
+    """`ci.py doctor`：自行载配置，打印两段。"""
     parser = argparse.ArgumentParser(
         prog="ci.py doctor",
-        description="只读自检：环境、生效配置、上次结论与下一步")
+        description="只读自检：环境与生效配置")
     parser.add_argument(
         "--config",
         default=os.environ.get(CONFIG_ENV, ""),
@@ -509,9 +264,8 @@ def main(argv=None):
         for line in environment_lines(None):
             _out("  " + line)
         _err(message)
-        _out(SECTIONS[3])
-        _out("  配置无法加载，先按上面的报错把 config/config.py 建起来，"
-             "再跑 init 探测: python3 ci/ci.py init")
+        _out("  配置无法加载：先按上面的报错写一份配置"
+             "（示例见 config-example/ci_config.py）")
         return code
     for title, lines in sections(config):
         _out(title)

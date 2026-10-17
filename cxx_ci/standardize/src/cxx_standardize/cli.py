@@ -12,17 +12,14 @@
 
 import argparse
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import fmt, guards, log
 from .version import version_line
-from . import audit as audit_mod
 from . import platform
 from . import config as config_module
 from . import format as format_mod
-from . import report as report_module
 from . import style as style_mod
 from .errors import Code, exit_code
 from .models import ClangTools
@@ -83,12 +80,6 @@ def build_parser():
                         help="排除路径，逗号分隔，优先级高于 --paths")
     parser.add_argument("--config-file", default="",
                         help="工具自身配置文件的位置，缺省取配置里的 .clang-format / .clang-tidy")
-    parser.add_argument("--changed-only", action="store_true",
-                        help="只处理改动过的文件")
-    parser.add_argument("--base", default="",
-                        help="增量取集的基准引用，如 origin/main")
-    parser.add_argument("--full", action="store_true",
-                        help="强制全量处理，覆盖配置里的增量开关")
     parser.add_argument("--no-prepare", action="store_true",
                         help="跳过分析前的派生文件生成步")
     parser.add_argument("--jobs", type=int, default=0,
@@ -97,21 +88,7 @@ def build_parser():
                         help="透传工具自身的进度等过程噪声（缺省只落盘到日志）")
     parser.add_argument("--config", default="",
                         help="项目配置的位置；缺省取环境变量 "
-                             "CXX_STANDARDIZE_CONFIG 或工具自带的 config/config.py")
-    parser.add_argument("--no-audit", action="store_true",
-                        help="跳过配置审计，仅调试用")
-    parser.add_argument(
-        "--report",
-        nargs="?",
-        const="-",
-        default=None,
-        help="写机器可读报告：--report=PATH 写文件，--report 或 --report=- 打到标准输出",
-    )
-    parser.add_argument(
-        "--report-format",
-        default="json",
-        help="报告格式，目前只有 json",
-    )
+                             "CXX_STANDARDIZE_CONFIG；示例见 config-example/standardize_config.py")
     parser.add_argument("--version", action="store_true", help="打印版本与环境后退出")
     return parser
 
@@ -126,9 +103,6 @@ def to_request(args):
         paths=_split(args.paths),
         exclude=_split(args.exclude),
         config_file=args.config_file,
-        changed_only=args.changed_only,
-        base=args.base,
-        full=args.full,
         apply=args.apply,
         apply_naming=False,
         fix=args.fix,
@@ -203,12 +177,8 @@ def actions_for(request):
     return (request.action,)
 
 
-def run_request(config, request, report=None):
-    """按请求执行，返回错误码。
-
-    report 是报告收集器（可为 None）：各动作把结构化结论投喂给它，阶段状态
-    在这里按错误码收口——报告不重新判卷，只搬运。
-    """
+def run_request(config, request):
+    """按请求执行，返回错误码。"""
     if request.accept_baseline and request.action == "style":
         log.err("--accept-baseline 只对排版有意义，不能与 style 同时使用")
         return Code.CONFIG_BAD_VALUE
@@ -222,8 +192,6 @@ def run_request(config, request, report=None):
     if code != Code.OK:
         log.err(message)
         return code
-    if report is not None:
-        report.tools = tools
     for line in tools.banner():
         log.out(line)
 
@@ -231,64 +199,27 @@ def run_request(config, request, report=None):
     for name in actions_for(request):
         log.out(f"== {name} ==")
         log.truncate_log(config, name)
-        started = time.monotonic()
         if name == "style":
             if request.options.apply:
                 # --apply 的语义包含命名：改完风格顺带把命名也规范了
                 request.options.apply_naming = True
             if request.options.record:
-                code = style_mod.record(config, request.options, tools, report)
+                code = style_mod.record(config, request.options, tools)
             elif request.options.apply:
-                code = style_mod.apply(config, request.options, tools, report)
+                code = style_mod.apply(config, request.options, tools)
             else:
-                code = style_mod.check(config, request.options, tools, report)
+                code = style_mod.check(config, request.options, tools)
         elif request.accept_baseline:
             code = format_mod.accept_baseline(config, request.options,
-                                               tools, request.yes, report)
+                                               tools, request.yes)
         else:
-            code = format_mod.check(config, request.options, tools, report)
-        if report is not None:
-            report.close(name, code, time.monotonic() - started)
+            code = format_mod.check(config, request.options, tools)
         if code != Code.OK:
             log.err(f"{name} 未通过")
             return code
         if first == Code.OK:
             first = code
     return first
-
-
-def publish_report(config, args, collector, code=None, detail=""):
-    """写机器可读报告。
-
-    报告是旁路产物：它的结论与终端同源（同一份收集器），写报告自身失败（目录
-    不可写、格式非法）只降级为警告，绝不改变门禁结论与退出码。
-
-    整体结论（code/detail）由入口给：报告不自己判卷，但必须把入口的判定带出去。
-    少了它，"一段都没跑就失败"在平台眼里是 tests=0 failures=0——零失败。
-    """
-    target = getattr(args, "report", None)
-    if not target:
-        return
-    formats = [item.strip() for item in (args.report_format or "").split(",")
-               if item.strip()] or ["json"]
-    unknown = [name for name in formats if name not in report_module.FORMATS]
-    if unknown:
-        log.err("未知报告格式: " + "、".join(unknown)
-                + "（可用: " + "、".join(report_module.FORMATS) + "）")
-        return
-    try:
-        document = report_module.build(
-            config, collector,
-            conclusion=report_module.conclusion_of(code, detail))
-        written, problems = report_module.write(document, target, formats)
-    except (OSError, ValueError, TypeError) as exc:
-        log.err("生成报告失败（不影响判定）: {}".format(exc))
-        return
-    for problem in problems:
-        log.err("警告: " + problem)
-    for path in written:
-        if path != "<stdout>":
-            log.out("报告已写入: " + path)
 
 
 def doctor_command(args):
@@ -351,21 +282,7 @@ def main(argv=None):
 
 def _run_locked(config, args, code):
         """拿到互斥锁之后真正干活（锁由调用方释放）。"""
-        collector = report_module.Collector()
-        # 配置审计先于任何动作：纪律违规没必要再花时间调 clang。
-        # --no-audit 只用于调试审计本身。
-        if not args.no_audit:
-            code, messages = audit_mod.run(config)
-            if code != Code.OK:
-                for line in messages:
-                    log.err(line)
-                publish_report(config, args, collector, exit_code(code),
-                               "配置审计失败：" + (messages[0] if messages else ""))
-                return int(exit_code(code))
-        code = run_request(config, to_request(args), collector)
-        publish_report(config, args, collector, exit_code(code),
-                       "运行完成" if code == Code.OK else "运行未通过")
-        return int(exit_code(code))
+        return int(exit_code(run_request(config, to_request(args))))
 
 
 def entrypoint():

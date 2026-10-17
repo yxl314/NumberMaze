@@ -3,4 +3,4 @@
 # 本侧零第三方依赖，只用标准库，Python >= 3.4（老机器上不需要 pip）。
 # 本文件用于占位与审计：任何被加进来的包都应视为违反设计。
 #
-# 由 tools/export_requirements.py 从 standardize/pyproject.toml 生成，请勿手改。
+# 本文件手写维护。

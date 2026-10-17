@@ -20,7 +20,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from lib import asan, errors, xfail  # noqa: E402
-from lib.config import DEFAULTS, TOOL_ROOT, load_config  # noqa: E402
+from lib.config import (DEFAULTS, TOOL_ROOT, example_path,  # noqa: E402
+                        load_config)
 
 
 # 最小可用配置：路径都落在临时项目根下。构建文件不必真实存在——配置只校验
@@ -87,7 +88,7 @@ def configured(extra="", tool="qmake6"):
 
 def checklist(*cases):
     """只登记 test 类的清单。"""
-    entries = [xfail.Entry("test", case, "", 0, "") for case in cases]
+    entries = [xfail.Entry("test", case, "", 0) for case in cases]
     return xfail.Checklist(xfail.Registry("", "", entries))
 
 
@@ -396,7 +397,7 @@ class TestShippedConfig:
 
     def template(self):
         config, code, message = load_config(
-            str(TOOL_ROOT / "config" / "config.py.example"))
+            str(example_path()))
         assert config is not None, message
         return config
 

@@ -32,9 +32,6 @@ class _Checklist:
     def stale(self, considered=None):
         return []
 
-    def expired(self, today=""):
-        return []
-
 
 class _Config:
     """_prepare_run 只读这几个字段，其余交给被 monkeypatch 的桩。"""
@@ -43,7 +40,6 @@ class _Config:
     clang_tidy_config = ""
     xfail_strict = False
     verify_command = ["true"]
-    incremental = False
     jobs = 0
 
     def __init__(self, root):
@@ -109,9 +105,6 @@ def test_preamble_steps_run_once_per_entry(project, monkeypatch):
                         lambda config: mark("database", (
                             str(project.path / "build"
                                 / "compile_commands.json"), Code.OK, "")))
-    monkeypatch.setattr(style, "incremental_files",
-                        lambda config, options, found, database_dir=None:
-                        mark("incremental", (list(found), [])))
     monkeypatch.setattr(style.xfail, "load_checklist",
                         lambda config: (_Checklist(), Code.OK, ""))
     monkeypatch.setattr(style, "_scan", lambda *a, **k: [])
@@ -119,15 +112,12 @@ def test_preamble_steps_run_once_per_entry(project, monkeypatch):
     config = _Config(project.path)
     options = style.Options()
 
-    for entry, incremental in ((style.check, True),
-                               (style.record, False),
-                               (style.apply, True)):
+    for entry in (style.check, style.record, style.apply):
         del calls[:]
         entry(config, options, _Tools())
         assert 1 == calls.count("prepare"), calls
         assert 1 == calls.count("collect"), calls
         assert 1 == calls.count("database"), calls
-        assert (1 if incremental else 0) == calls.count("incremental"), calls
 
 
 def test_record_generates_derived_files_first(project):

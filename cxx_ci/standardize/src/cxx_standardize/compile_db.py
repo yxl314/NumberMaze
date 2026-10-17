@@ -200,75 +200,6 @@ def _entries_of(path: Path) -> list[Entry]:
 # 依赖生成时要去掉的选项：它们要么与 -MM 冲突，要么指定了不想要的输出
 _DEPENDENCY_DROP = ("-o", "-MF", "-MT", "-MQ", "-MD", "-MMD")
 # 依赖生成会写成多行续行；去掉续行再按冒号切开
-_DEPENDENCY_LINE = re.compile(r"\s*\\\n")
-
-
-def dependency_command(entry: Entry) -> list[str] | None:
-    """把一条编译命令改成"只生成依赖"的命令。
-
-    `-MM` 是编译器自己的依赖输出（不含系统头），因此拿到的是**精确**的包含
-    关系：间接包含、同名头文件、注释里的 #include 都不会骗到它。
-    """
-    arguments = [str(item) for item in entry.arguments]
-    if not arguments:
-        return None
-    result, index = [], 0
-    while index < len(arguments):
-        token = arguments[index]
-        if token in _DEPENDENCY_DROP:
-            index += 2
-            continue
-        if token == "-c":
-            result.append("-MM")
-            index += 1
-            continue
-        result.append(token)
-        index += 1
-    return result
-
-
-def _entry_for(path: Path, entries: list[Entry]) -> Entry | None:
-    """找到某个文件对应的编译条目。"""
-    target = Path(path).resolve()
-    for entry in entries:
-        candidate = Path(entry.file)
-        if not candidate.is_absolute():
-            candidate = Path(entry.directory) / candidate
-        if candidate.resolve() == target:
-            return entry
-    return None
-
-
-def dependencies(path: Path, database_dir: Path) -> tuple[set[Path], Code, str]:
-    """该文件包含了哪些头文件（含间接包含），用编译器自己的 `-MM` 取。
-
-    返回 (包含的头文件集合, 错误码, 说明)。集合里只有落在编译命令行里出现过
-    的路径，且已归一化成绝对路径。
-    """
-    entries = read_entries(Path(database_dir) / DB_NAME)
-    entry = _entry_for(Path(path), entries)
-    if entry is None:
-        return set(), Code.DB_MISSING, f"编译数据库里没有 {path} 的条目"
-    command = dependency_command(entry)
-    if command is None:
-        return set(), Code.DB_MISSING, f"{path} 的编译条目没有可用的命令行"
-    code, stdout, stderr = _run(command, cwd=Path(entry.directory),
-                                env=c_locale_env(), timeout=_PROVIDER_TIMEOUT)
-    if code is None:
-        return set(), Code.COMMAND_UNRUNNABLE, stderr
-    if code != 0:
-        return set(), Code.COMMAND_UNRUNNABLE, \
-            f"{path} 的依赖生成失败（退出码 {code}）: {stderr.strip()[:200]}"
-    text = _DEPENDENCY_LINE.sub(" ", stdout)
-    _, _, tail = text.partition(":")
-    found = set()
-    for token in tail.split():
-        candidate = Path(token)
-        if not candidate.is_absolute():
-            candidate = Path(entry.directory) / candidate
-        found.add(Path(os.path.normpath(candidate)))
-    found.discard(Path(os.path.normpath(Path(path))))
-    return found, Code.OK, ""
 
 
 def read_entries(path: Path) -> list[Entry]:
@@ -597,7 +528,7 @@ def _check_directories(path: Path) -> tuple[Code, str]:
         return Code.OK, ""
     return Code.DB_STALE_DIRECTORY, (
         "编译数据库里有 {} 条记录的构建目录不存在，clang-tidy 会直接中止: "
-        "{}。先跑一次完整构建（含测试），或用 --changed-only 缩小范围"
+        "{}。先跑一次完整构建（含测试）再重试"
         .format(len(missing), "、".join(missing[:3])))
 
 

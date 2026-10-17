@@ -87,7 +87,7 @@ class Sandbox(object):
             shutil.copy(str(ROOT / "stages" / (name + ".py")),
                         str(stages / (name + ".py")))
         shutil.copytree(str(ROOT / "lib"), str(self.path / "lib"))
-        shutil.copytree(str(ROOT / "config"), str(self.path / "config"))
+        (self.path / "config").mkdir()
         # 必须带上 .gitignore，否则 __pycache__ 会被提交并在后续运行中反复变化
         shutil.copy(str(ROOT / ".gitignore"), str(self.path / ".gitignore"))
         self.has_git = self._init_git()
@@ -140,7 +140,10 @@ class Sandbox(object):
 
     def configure(self, text):
         """覆写沙箱内的项目配置。"""
-        with open(str(self.path / "config" / "config.py"), "w",
+        directory = self.path / "config"
+        if not directory.is_dir():
+            directory.mkdir()
+        with open(str(directory / "config.py"), "w",
                   encoding="utf-8") as handle:
             handle.write(text)
 

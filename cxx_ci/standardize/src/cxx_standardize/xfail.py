@@ -7,7 +7,7 @@
     未登记的新违规照判失败；
     登记项已修复（本次没命中）则提示可移除，XFAIL_STRICT 打开时直接判失败。
 
-清单是纯文本，一行一条，`#` 起注释，行尾可写 `@YYYY-MM-DD` 作复核到期日：
+清单是纯文本，一行一条，`#` 起注释：
 
     [style]
     src/util.cpp:readability-identifier-naming
@@ -22,7 +22,6 @@ style，其余也按 style——本项目的清单只有这一种条目。
 """
 
 import re
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,7 +31,6 @@ from .errors import Code
 KINDS = ("style",)
 
 _SECTION = re.compile(r"^\[(?P<kind>\w+)\]$")
-_REVIEW = re.compile(r"@(?P<date>\d{4}-\d{2}-\d{2})\s*$")
 # 行内注释：`#` 在行首或前面是空白才算注释，路径里的 `#` 不当注释
 _COMMENT = re.compile(r"(?:^|\s)#.*$")
 # clang-tidy 检查名：模块前缀 + 连字符或点
@@ -47,7 +45,6 @@ class Entry:
     value: str
     detail: str = ""
     line: int = 0
-    review: str = ""
 
 
 @dataclass
@@ -86,7 +83,7 @@ def _parse_entry(text, section):
     path = ":".join(fields[:-2]) if middle else ":".join(fields[:-1])
     if not path:
         return None, "style 条目缺少文件路径: " + text
-    return Entry("style", path, check, line, ""), ""
+    return Entry("style", path, check, line), ""
 
 
 def parse(text):
@@ -100,13 +97,6 @@ def parse(text):
         line = _COMMENT.sub("", raw).strip()
         if not line:
             continue
-        review = ""
-        match = _REVIEW.search(line)
-        if match:
-            review = match.group("date")
-            line = line[:match.start()].strip()
-            if not line:
-                continue
         header = _SECTION.match(line)
         if header:
             kind = header.group("kind")
@@ -118,8 +108,7 @@ def parse(text):
         entry, message = _parse_entry(line, section)
         if entry is None:
             return None, Code.XFAIL_BAD_FILE, f"第 {number} 行{message}"
-        entries.append(Entry(entry.kind, entry.value, entry.detail,
-                             entry.line, review))
+        entries.append(entry)
     return entries, Code.OK, ""
 
 
@@ -214,11 +203,6 @@ class Checklist:
             result.append(entry)
         return result
 
-    def expired(self, today):
-        """复核到期日已过的登记项。"""
-        return [entry for entry in self.registry.entries
-                if entry.review and entry.review < today]
-
 
 def write(path, entries, config=None):
     """把登记项写成清单文本，返回 (错误码, 说明)。
@@ -255,7 +239,7 @@ def load_checklist(config):
     return Checklist(Registry(str(path), str(root), entries or [])), Code.OK, ""
 
 
-def verdict(checklist, considered=None, strict=False, today="", hits=()):
+def verdict(checklist, considered=None, strict=False, hits=()):
     """汇总清单状态，返回 (错误码, 提示行列表)。
 
     considered 见 Checklist.stale。提示行由调用方打印，库只算结论——展示策略
@@ -263,15 +247,10 @@ def verdict(checklist, considered=None, strict=False, today="", hits=()):
     补齐第三态 **新增**（清单里没有、这次真的出现了）。三态收在一处，两侧的
     分类才有同一个口径可比。
     """
-    if not today:
-        today = time.strftime("%Y-%m-%d")
     notes = []
     stale = checklist.stale(considered)
     for entry in stale:
         notes.append("xfail 已修复，可移除: " + describe(entry))
-    expired = checklist.expired(today)
-    for entry in expired:
-        notes.append(f"xfail 复核已到期（{entry.review}）: {describe(entry)}")
     if hits:
         registered = set()
         for entry in getattr(checklist.registry, "entries", None) or ():
@@ -281,6 +260,6 @@ def verdict(checklist, considered=None, strict=False, today="", hits=()):
         for key in hits:
             if key and key not in registered:
                 notes.append("xfail 新增（清单里没有）: " + str(key))
-    if strict and (stale or expired):
+    if strict and stale:
         return Code.XFAIL_STALE, notes
     return Code.OK, notes

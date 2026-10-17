@@ -16,7 +16,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import (compile_db, incremental, log, paths, prefix,
+from . import (compile_db, log, paths, prefix,
                source as source_mod, tidy, xfail)
 from .errors import Code
 from .models import Finding
@@ -38,9 +38,6 @@ class Options:
     paths: list[Path] = field(default_factory=list)
     exclude: list[Path] = field(default_factory=list)
     config_file: str = ""
-    changed_only: bool = False
-    base: str = ""
-    full: bool = False
     apply: bool = False
     # 命名改名默认不做：clang-tidy 只改它分析得到的引用，声明在头文件里时甚至
     # 不产出修复。打开后改用"只做加前缀"的派生配置
@@ -127,38 +124,6 @@ def prepare(config):
     return True, ""
 
 
-def _dependency_resolver(database_dir):
-    """给出"某个文件包含了哪些头文件"的精确解析器。
-
-    用编译数据库里的命令跑一次编译器自己的 `-MM`：间接包含、同名头文件、注释里
-    的 #include 都不会骗到它。没有数据库时返回 None，调用方只按改动文件本身
-    取集——不另写一套文本匹配，那等于"用编译器算包含关系"这件事从未发生。
-    """
-    if not database_dir:
-        return None
-
-    def resolve(path):
-        return compile_db.dependencies(path, database_dir)
-
-    return resolve
-
-
-def incremental_files(config, options, files, database_dir=None):
-    """按改动集收窄处理范围，返回 (文件列表, 说明行列表)。"""
-    if not (options.changed_only or (config.incremental and not options.full)):
-        return files, []
-    changed, code, message = incremental.changed_paths(config.root, options.base)
-    if code != Code.OK:
-        return files, [f"增量取集不可用（{message}），退回全量"]
-    resolver = None
-    if config.incremental_includes:
-        resolver = _dependency_resolver(database_dir)
-    selected, notes = incremental.select(changed, files, resolver)
-    how = "按编译器给出的包含关系" if resolver else "只按改动文件本身"
-    return selected, [(f"改动集 {len(changed)} 个文件，{how}映射到 "
-                       f"{len(selected)} 个待处理文件")] + notes
-
-
 def ensure_database_with_build(config):
     """取编译数据库；缺了或过期就先按 BUILD_COMMAND 构建一次，再取一遍。
 
@@ -227,18 +192,14 @@ class _Run:
     prepare_note: str = ""
 
 
-def _prepare_run(config, options, need_database=True, need_checklist=True,
-                 apply_incremental=True):
+def _prepare_run(config, options, need_database=True, need_checklist=True):
     """三入口共享的前置准备，只做一遍。
 
-    顺序：生成派生文件 → 收集待处理文件 → 取编译数据库 → 收窄改动集 → 校验风格
-    配置文件 → 读登记清单。任何一步失败都把错误码与说明放进返回值，由调用方决定
+    顺序：生成派生文件 → 收集待处理文件 → 取编译数据库 → 校验风格配置文件 →
+    读登记清单。任何一步失败都把错误码与说明放进返回值，由调用方决定
     怎么报。派生文件（moc_/ui_/qrc_）缺了会让含 #include "X.moc" 的翻译单元被判成
     编译错误、该 TU 的 fix-it 也一并被抑制，因此生成失败一律走 stderr，并把
     prepare_failed 带出去，供 record/apply 在结论里说明"结果不完整"。
-
-    `apply_incremental=False` 是有意的差异而非漏写：`--record` 要把存量全量冻结
-    成基线，不做改动集收窄。
     """
     run = _Run()
     if config.tidy_prepare and not options.no_prepare:
@@ -266,17 +227,6 @@ def _prepare_run(config, options, need_database=True, need_checklist=True,
             return run
         run.database_dir = Path(database).parent
 
-    if apply_incremental:
-        # 收窄范围要放在取到数据库之后：改动的头文件靠编译数据库里的依赖关系
-        # 映射到受影响的翻译单元，没有它就只能按文件名文本匹配
-        files, notes = incremental_files(config, options, files,
-                                         run.database_dir)
-        for note in notes:
-            log.out(note)
-        if not files:
-            run.early = True
-            run.message = "改动集内没有需要检查的文件"
-            return run
 
     config_file = options.config_file or config.clang_tidy_config
     if config_file and not Path(config_file).is_file():
@@ -315,12 +265,8 @@ def inspect(binary, config, config_file, path, fixes_path, database_dir=None,
     return code, output, found, fcode, fmessage
 
 
-def _classify(config, findings, checklist, stage=None):
-    """按登记清单把诊断分成已登记与新增，返回 (新增条数, 已登记条数)。
-
-    stage 是报告收集器的阶段对象（可为 None）：诊断一条一条搬进去，xfail 标注
-    与终端回显同一次判定，报告不做第二次匹配。
-    """
+def _classify(config, findings, checklist):
+    """按登记清单把诊断分成已登记与新增，返回 (新增条数, 已登记条数)。"""
     fresh, known = 0, 0
     # 归属只算一次：它只取决于配置，与具体是哪条诊断无关
     project, excluded = paths.scope_roots(config)
@@ -332,14 +278,6 @@ def _classify(config, findings, checklist, stage=None):
         else:
             fresh += 1
             log.out(item.describe())
-        if stage is not None:
-            # owner 是"这条诊断算谁的问题"：与 ci 侧同一套 scope_of 口径。
-            # 保留它，报告里才能把第三方头文件引发的告警和项目自身的问题分开
-            stage.add_diagnostic(item.file, item.line, item.column,
-                                 item.level.value, item.message, item.check,
-                                 owner=paths.scope_of(item.file, project,
-                                                      excluded),
-                                 xfail=hit is not None)
     return fresh, known
 
 
@@ -347,30 +285,24 @@ def _is_header(path):
     return Path(path).suffix in HEADER_SUFFIXES
 
 
-def _tally(config, findings, checklist, stage, silent):
-    """按文件分类诊断并按登记清单计数，返回 (待改文件数, 新增, 已登记, 分文件)。
-
-    分类与回显是同一次判定：报告收集器拿到的就是这一次判定，不做第二次匹配。
-    """
-    pending, fresh_total, known_total = 0, 0, 0
+def _tally(config, findings, checklist, silent):
+    """按文件分类诊断并按登记清单计数，返回 (待改文件数, 分文件)。"""
+    pending = 0
     by_file: dict[Path, list[Finding]] = {}
     for item in findings:
         by_file.setdefault(item.file, []).append(item)
     for path, items in by_file.items():
-        fresh, known = _classify(config, items, checklist, stage)
-        fresh_total += fresh
-        known_total += known
+        fresh, known = _classify(config, items, checklist)
         if known:
             log.out(f"{path}: 已登记 {known} 条（xfail），新增 {fresh} 条")
         if fresh:
             pending += 1
     pending += len(silent)
-    return pending, fresh_total, known_total, by_file
+    return pending, by_file
 
 
-def _announce(findings, by_file, skipped, silent, pending, stage,
-              fresh_total, known_total):
-    """报诊断条数、无法分析的文件，并把摘要投喂给报告收集器。
+def _announce(findings, by_file, skipped, pending):
+    """报诊断条数、无法分析的文件。
 
     条数与文件数分开报：头文件里的诊断可能很多，只看文件数看不出量级；去重也要
     说出来——同一处被 N 个翻译单元包含时只计一次，否则条数会随"谁包含了这个头
@@ -389,29 +321,10 @@ def _announce(findings, by_file, skipped, silent, pending, stage,
                 f"另有 {pending} 个文件存在风格问题")
         for path in skipped:
             log.out(f"    {path}")
-    if stage is None:
-        return
-    parts = []
-    if total:
-        parts.append(f"风格诊断 {total} 条，涉及 {len(touched)} 个文件")
-    if fresh_total or known_total:
-        parts.append(f"新增 {fresh_total} 条，已登记 {known_total} 条（xfail）")
-    if pending:
-        parts.append(f"{pending} 个文件存在风格问题")
-    stage.summary = " | ".join(parts)
-    for path in skipped:
-        stage.add_failure(str(path), "无法分析（编译错误）")
-    for path, _output in silent:
-        stage.add_failure(str(path), "无结构化诊断但判定待改")
 
 
-def check(config, options, tools, report=None):
-    """预览：检查风格并给出结论，返回错误码。
-
-    report 是报告收集器（可为 None）；诊断、"无法分析"清单与摘要都搬进去，
-    阶段状态由调用方按错误码收口。
-    """
-    stage = report.stage("style") if report is not None else None
+def check(config, options, tools):
+    """预览：检查风格并给出结论，返回错误码。"""
     run = _prepare_run(config, options)
     if run.early:
         log.out(run.message)
@@ -430,17 +343,15 @@ def check(config, options, tools, report=None):
     findings, skipped, silent = _collect_results(results)
     for path, output in silent:
         log.out(output)
-    pending, fresh_total, known_total, by_file = _tally(
-        config, findings, run.checklist, stage, silent)
-    _announce(findings, by_file, skipped, silent, pending, stage,
-              fresh_total, known_total)
+    pending, by_file = _tally(config, findings, run.checklist, silent)
+    _announce(findings, by_file, skipped, pending)
 
     considered = [path for path in run.files if path not in skipped]
     code, notes = xfail.verdict(run.checklist, considered, config.xfail_strict)
     for note in notes:
         log.out(note)
     if code != Code.OK:
-        log.err("xfail 清单有已修复或已到期的登记项，请清理后重跑")
+        log.err("xfail 清单有已修复的登记项，请清理后重跑")
         return code
     if pending:
         log.err(f"{pending} 个文件存在风格问题")
@@ -525,16 +436,13 @@ def _verify(config):
     return result.returncode == 0
 
 
-def record(config, options, tools, report=None):
+def record(config, options, tools):
     """把当前未登记的诊断登记成基线，返回错误码。
 
     用途是"接入即绿"：存量违规冻结成已知项，此后只有**新增**违规判红。它不
     修改代码，也不代表命名被改对了——真正清存量靠 `--apply`（默认包含命名）。
     """
-    # 只读动作：不替人还原
-    stage = report.stage("style") if report is not None else None
-    # 登记基线本就该全量：--record 不做改动集收窄（有意的差异，不是漏了）
-    run = _prepare_run(config, options, apply_incremental=False)
+    run = _prepare_run(config, options)
     if run.early:
         log.out(run.message)
         return Code.OK
@@ -557,8 +465,6 @@ def record(config, options, tools, report=None):
         log.err(INCOMPLETE_NOTE)
     if not fresh:
         log.out("没有需要登记的诊断")
-        if stage is not None:
-            stage.summary = "没有需要登记的诊断"
         return Code.STYLE_FAILED if _incomplete(config, run) else Code.OK
     target = str(getattr(config, "xfail_file", "") or "")
     if not target:
@@ -571,8 +477,6 @@ def record(config, options, tools, report=None):
         log.err(message)
         return code
     log.out("已登记 {} 条基线到 {}".format(len(entries), target))
-    if stage is not None:
-        stage.summary = "已登记 {} 条基线到 {}".format(len(entries), target)
     return Code.STYLE_FAILED if _incomplete(config, run) else Code.OK
 
 
@@ -584,9 +488,8 @@ def _relative(config, path):
         return str(path)
 
 
-def apply(config, options, tools, report=None):
+def apply(config, options, tools):
     """逐文件修复，只保留验证仍通过的结果。"""
-    stage = report.stage("style") if report is not None else None
     run = _prepare_run(config, options, need_checklist=False)
     if run.early:
         log.out(run.message)
@@ -620,13 +523,7 @@ def apply(config, options, tools, report=None):
         log.err(f"{len(manual)} 个文件需人工处理，自动修复会破坏编译:")
         for path in manual:
             log.out(f"    {path}")
-        if stage is not None:
-            for path in manual:
-                stage.add_failure(str(path), "需人工处理，自动修复会破坏编译")
     if fixed is None:
-        if stage is not None and blocked:
-            for path in blocked:
-                stage.add_failure(str(path), "修复落点落在禁改区/黑名单，整体拒绝")
         # 只有"红线被触碰"才报 FROZEN_TOUCHED；读不出修复文件是另一回事
         return Code.FROZEN_TOUCHED if blocked else Code.STYLE_FAILED
     if fixed:
@@ -652,17 +549,6 @@ def apply(config, options, tools, report=None):
                     "其中 {} 条已登记、{} 条未登记".format(
                         len(unfixable_paths), len(unfixable_paths) - remaining,
                         remaining))
-    if stage is not None:
-        for path in manual:
-            stage.add_failure(str(path), "需人工处理，自动修复会破坏编译")
-        for path in skipped:
-            stage.add_failure(str(path), "无法分析（编译错误）")
-        parts = []
-        if fixed:
-            parts.append(f"已自动修复 {len(fixed)} 个文件")
-        if unfixable:
-            parts.append(f"{unfixable} 条诊断无自动修复")
-        stage.summary = " | ".join(parts)
     if not fixed and not manual and not skipped and not unfixable:
         if run.prepare_failed:
             # 派生文件未就绪意味着可能一个 TU 都没分析：不许它与"全部干净"同结论。

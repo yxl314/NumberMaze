@@ -17,9 +17,8 @@
 阶段的执行、落盘与展示都在 common/stage.py 里，standardize.py 走同一份
 实现——两个入口各写一套展示，行为必然分叉。
 
-子命令 `doctor` 只读自检，回答"现在生效的是什么、上次为什么红、下一步跑什么"；
-`--help-config` 由配置元数据生成，列出每一项的语义、推导规则与改动时机。
-两者都出自 lib/config.py 的同一张元数据表，文档因此不会与实现分叉。
+子命令 `doctor` 只读自检，回答"现在生效的是什么、上次为什么红、下一步跑什么"。
+配置项的说明与示例见仓库根的 config-example/ci_config.py。
 
 共享参数见 lib/。
 """
@@ -39,7 +38,6 @@ sys.path.insert(0, str(ROOT))
 from lib import (cli, config as config_module, doctor,  # noqa: E402
                  platform)
 from lib import diagnostics as diagnostics_module  # noqa: E402
-from lib import report as report_module  # noqa: E402
 from lib import errors, output, stage, version  # noqa: E402
 
 # 基础流程。风格与排版属于另一个项目，见仓库根的 CONTRACT.md。
@@ -90,44 +88,6 @@ def report(records, quiet, skipped=()):
     output.out("总计 {:.1f}s".format(sum(result.elapsed for result in records)))
 
 
-def publish_report(config, args, records, skipped, code=errors.OK, detail=""):
-    """写机器可读报告。
-
-    报告是旁路产物：它的结论与终端同源（同一份 stage_view），写报告自身失败
-    （目录不可写、格式非法）只降级为警告，绝不改变门禁结论与退出码。
-
-    整体结论（code/detail）由入口给：报告不自己判卷，但必须把入口的判定带出去。
-    少了它，"一段都没跑就失败"在平台眼里是 tests=0 failures=0——零失败。
-    """
-    if not args.report:
-        return
-    # 路径里带逗号多半是把 --report-format 的写法搬了过来：逗号分隔的是**格式**，
-    # 路径只收一个。与其照着这个路径造出一个名字里带逗号的目录，不如当场说清
-    if args.report != "-" and "," in args.report:
-        output.err("--report 只收一个路径，不接受逗号分隔: {}"
-                   .format(args.report))
-        return
-    formats = split_names(args.report_format) or ["json"]
-    unknown = [name for name in formats if name not in report_module.FORMATS]
-    if unknown:
-        output.err("未知报告格式: " + ", ".join(unknown)
-                   + "（可用: " + "、".join(report_module.FORMATS) + "）")
-        return
-    try:
-        document = report_module.build(
-            config, records, skipped,
-            conclusion=report_module.conclusion_of(code, detail))
-        written, problems = report_module.write(document, args.report, formats)
-    except (IOError, OSError, ValueError, TypeError) as exc:
-        output.err("生成报告失败（不影响判定）: {}".format(exc))
-        return
-    for problem in problems:
-        output.err("警告: " + problem)
-    for path in written:
-        if path != "<stdout>":
-            output.out("报告已写入: " + path)
-
-
 def build_parser(config):
     """构造命令行解析器。"""
     parser = cli.make_parser(__doc__, config)
@@ -161,19 +121,6 @@ def build_parser(config):
         help="结束后不清理，保留构建产物",
     )
     parser.add_argument(
-        "--report",
-        nargs="?",
-        const="-",
-        default=None,
-        help="写机器可读报告：--report=PATH 写单个文件（多格式时自动加后缀），"
-             "--report 或 --report=- 打到标准输出",
-    )
-    parser.add_argument(
-        "--report-format",
-        default="json",
-        help="报告格式，目前只有 json",
-    )
-    parser.add_argument(
         "--version",
         action="store_true",
         help="打印版本与契约版本后退出（不需要配置）",
@@ -195,10 +142,6 @@ def main():
     # 形状与 cxx-standardize --version 一致（见 lib/version.py）。
     if "--version" in argv:
         output.out(version.version_line())
-        return errors.OK
-    # --help-config 出自配置元数据，与是否已有配置无关，同样先短路
-    if "--help-config" in argv:
-        output.out(config_module.help_config_text().rstrip("\n"))
         return errors.OK
     # --help/-h/--version 也先短路：它们问的是"这个工具怎么用"，与有没有配置
     # 无关。放到配置加载之后时，一个还没接入的工程敲 --help 得到的是
@@ -244,8 +187,6 @@ def run_stages(config, args):
                                    default_stages(config))
     if unknown:
         output.err("未知阶段: " + ", ".join(unknown))
-        publish_report(config, args, [], [], errors.UNKNOWN_STAGE,
-                       "未知阶段: " + ", ".join(unknown))
         return errors.UNKNOWN_STAGE
     if not stages:
         # 筛完一个都不剩（例如 --only build --skip build）：什么都不做就
@@ -255,8 +196,6 @@ def run_stages(config, args):
                    "（选中: {}；跳过: {}）".format(
                        len(requested), len(args.skip),
                        "、".join(requested), "、".join(args.skip) or "无"))
-        publish_report(config, args, [], [], errors.CONFIG_BAD_VALUE,
-                       "没有可执行的阶段")
         return errors.CONFIG_BAD_VALUE
     # 末尾清理只在跑完整流程且全部通过后执行；中途失败会提前返回，产物得以保留
     if not args.only and not args.no_clean_after:
@@ -275,8 +214,6 @@ def run_stages(config, args):
             output.err("DIAGNOSTIC_IGNORE 里有会回溯爆炸的正则：它没有在 "
                        "{} 秒内跑完。请改写这条正则（避免 (a+)+ 这类嵌套量词）"
                        "或去掉它".format(diagnostics_module.IGNORE_PATTERN_SECONDS))
-            publish_report(config, args, records, [], errors.CONFIG_BAD_VALUE,
-                           "DIAGNOSTIC_IGNORE 里的正则回溯爆炸")
             return errors.CONFIG_BAD_VALUE
         records.append(result)
         if errors.kind(result.code) == errors.KIND_SKIPPED:
@@ -290,11 +227,8 @@ def run_stages(config, args):
         if result.code != 0:
             output.err("阶段 {} 未通过，产物保留以便排查".format(name))
             report(records, False)
-            publish_report(config, args, records, skipped, result.code,
-                           "阶段 {} 未通过".format(name))
             return result.code
     report(records, args.level == "quiet", skipped)
-    publish_report(config, args, records, skipped, errors.OK, "全部通过")
     return errors.OK
 
 

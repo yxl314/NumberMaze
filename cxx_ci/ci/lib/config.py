@@ -112,365 +112,10 @@ DEFAULTS = {
     "SOURCE_ENCODING_CANDIDATES": [],
 }
 
-# --------------------------------------------------------------- 配置元数据
-#
-# 每项登记：level（必需性）、summary（一句话语义）、derive（未写时的推导规则）、
-# when（什么时候才需要动它）；可选 code 是 example 里的取值表达式，note 是补充
-# 说明行。config.py.example 的分节与 ci.py --help-config 都由这张表生成，
-# 一致性测试钉住"元数据键集 == 可写的配置键集"——新增配置项却没登记元数据即
-# 测试红，文档漂移由此不可能发生。改说明请改这里，不要手改 example。
-LEVELS = ("必需", "常用", "调参")
-
-# 分节顺序，同时决定生成的 example 与 --help-config 里的排列
-SECTIONS = (
-    ("工程", ("ROOT", "BUILD_TOOL")),
-    ("构建", ("BUILD_TOOL_BIN", "BUILD_FILE", "BUILD_DIR",
-              "CXX_COMPILER", "CXX_STANDARD")),
-    ("测试", ("TEST_BUILD_FILE", "TEST_BUILD_DIR", "TEST_COMMAND",
-              "TEST_WORKDIR", "MEMCHECK_COMMAND")),
-    ("范围与禁改区", ("SCOPE", "FROZEN", "WHITELIST", "BLACKLIST")),
-    ("内存检查", ("MEMCHECK_TOOL", "MEMCHECK_SCOPE", "MEMCHECK_IGNORE_KINDS",
-                  "MEMCHECK_REPEAT", "MEMCHECK_IGNORE_SYMBOLS",
-                  "MEMCHECK_IGNORE_OBJECTS", "MEMCHECK_SKIP_TARGETS",
-                  "MEMCHECK_SUPPRESSIONS",
-                  "ASAN_BUILD_DIR", "ASAN_COMMAND", "ASAN_CXXFLAGS",
-                  "ASAN_LDFLAGS", "ASAN_LEAK_ARGS", "ASAN_SUPPRESSIONS",
-                  "ASAN_ERROR_MARKS")),
-    ("已登记问题", ("XFAIL_FILE", "XFAIL_STRICT")),
-    ("输出", ("DIAGNOSTIC_LEVEL", "DIAGNOSTIC_SOURCES", "DIAGNOSTIC_IGNORE",
-              "DIAGNOSTIC_DEDUP", "FAIL_OUTPUT", "TEST_REPORT_ADAPTER",
-              "TEST_FAIL_PATTERN", "TEST_TOTAL_PATTERN", "CI_LOG_DIR",
-              "TEST_ENV", "MEMCHECK_ENV", "STEPS_DEFAULT")),
-    ("源码编码（source）", ("SOURCE_ENCODING", "SOURCE_ENCODING_CANDIDATES")),
-)
-
-CONFIG_METADATA = {
-    "ROOT": {
-        "level": "必需",
-        "summary": "被 CI 的项目根",
-        "derive": "无：必须显式写",
-        "when": "首次接入；工具与项目不同级、或放在项目内部时改这里",
-        "code": "TOOL_ROOT.parent",
-    },
-    "BUILD_TOOL": {
-        "level": "必需",
-        "summary": "构建工具：cmake、qmake 或 qmake6",
-        "derive": "无：必须显式写",
-        "when": "首次接入；Qt6 工程写 \"qmake6\"",
-        "code": '"cmake"',
-    },
-    "BUILD_TOOL_BIN": {
-        "level": "常用",
-        "summary": "构建工具的可执行文件名，留空自动探测",
-        "derive": "留空＝按 BUILD_TOOL 在 PATH 上找（兼容 cmake3 这类带后缀命名）",
-        "when": "机器上同时装着两个版本的构建工具时",
-    },
-    "BUILD_FILE": {
-        "level": "常用",
-        "summary": "项目构建文件：cmake 用 CMakeLists.txt，qmake 用 .pro",
-        "derive": "留空＝按 BUILD_TOOL 在 ROOT 下自动探测（探测结果会提示一次）",
-        "when": "自动探测报错或有多份候选时显式点名",
-        "code": 'ROOT / "CMakeLists.txt"',
-    },
-    "BUILD_DIR": {
-        "level": "常用",
-        "summary": "项目编译输出目录",
-        "derive": "留空＝ROOT/build",
-        "when": "构建产物不落在 build 时",
-        "code": 'ROOT / "build"',
-    },
-    "CXX_COMPILER": {
-        "level": "常用",
-        "summary": "编译器名，可带版本或交叉前缀（如 g++-4.4）",
-        "derive": "留空＝由构建工具自己的缺省决定",
-        "when": "交叉编译或机器上有多个编译器时",
-        "code": '"g++"',
-    },
-    "CXX_STANDARD": {
-        "level": "常用",
-        "summary": "目标语言标准（c++98、c++14、gnu++98）",
-        "derive": "留空＝不传 -std=",
-        "when": "需要把语言标准钉死时",
-        "code": '"c++98"',
-    },
-    "TEST_BUILD_FILE": {
-        "level": "常用",
-        "summary": "测试构建文件，命名规则同 BUILD_FILE",
-        "derive": "留空＝与项目共用同一份构建文件",
-        "when": "测试工程与主工程分开构建时",
-        "code": 'ROOT / "test" / "CMakeLists.txt"',
-    },
-    "TEST_BUILD_DIR": {
-        "level": "常用",
-        "summary": "测试编译输出目录",
-        "derive": "留空＝与 BUILD_DIR 相同",
-        "when": "测试树独立构建时",
-        "code": 'ROOT / "build" / "test"',
-    },
-    "TEST_COMMAND": {
-        "level": "常用",
-        "summary": "运行测试的 argv 指令，第一项是可执行文件",
-        "derive": "留空＝不跑测试，run_test 与 memcheck 标 [SKIPPED]",
-        "when": "首次接入；按所用框架改成 gtest 二进制 / ctest / make check",
-        "code": '[TEST_BUILD_DIR / "run_tests"]',
-    },
-    "TEST_WORKDIR": {
-        "level": "常用",
-        "summary": "执行测试指令时的工作目录",
-        "derive": "留空＝不指定，沿用当前目录",
-        "when": "ctest 这类必须在构建目录内运行的测试",
-        "code": "TEST_BUILD_DIR",
-    },
-    "MEMCHECK_COMMAND": {
-        "level": "常用",
-        "summary": "内存检查执行的指令",
-        "derive": "留空＝取 TEST_COMMAND",
-        "when": "测试指令是 ctest/make 这类驱动时，改指具体测试程序",
-        "code": "TEST_COMMAND",
-    },
-    "SCOPE": {
-        "level": "常用",
-        "summary": "\"哪些算本项目\"：project 与 excluded 两组路径，excluded 优先",
-        "derive": "留空＝报错（旧名 WHITELIST/BLACKLIST 仍可用并提示一次）",
-        "when": "首次接入；外部依赖与生成代码目录进 excluded",
-        "code": ('{\n    "project": [ROOT / "src", ROOT / "include"],'
-                 '\n    "excluded": [ROOT / "third_party", ROOT / "build"],\n}'),
-        "note": ["excluded 没排除构建目录时，构建产物里的代码会被当成项目自己的。",
-                 "迁移到 SCOPE 后可以删掉 WHITELIST/BLACKLIST。"],
-    },
-    "FROZEN": {
-        "level": "常用",
-        "summary": "禁改区：ci 侧绝不可删、standardize 侧绝不可写的路径",
-        "derive": "缺省空＝不禁改",
-        "when": "静态链接的 vendored 冻结库目录",
-        "code": "[]",
-    },
-    "WHITELIST": {
-        "level": "调参",
-        "summary": "SCOPE.project 的旧名，保留兼容",
-        "derive": "未写 SCOPE 时回落到它，写了只提示一次",
-        "when": "老配置迁到 SCOPE 的过程中",
-        "code": "[]",
-    },
-    "BLACKLIST": {
-        "level": "调参",
-        "summary": "SCOPE.excluded 的旧名，保留兼容",
-        "derive": "未写 SCOPE 时回落到它，写了只提示一次",
-        "when": "老配置迁到 SCOPE 的过程中",
-        "code": "[]",
-    },
-    "MEMCHECK_TOOL": {
-        "level": "常用",
-        "summary": "内存检查路线：valgrind（深度归因）或 asan（快，适合日常）",
-        "derive": "缺省 valgrind",
-        "when": "日常跑 asan、合入门禁跑 valgrind 时",
-    },
-    "MEMCHECK_SCOPE": {
-        "level": "常用",
-        "summary": "归因口径：project 只把域内的算失败，all 全量计入",
-        "derive": "缺省 project",
-        "when": "沿用旧配置名的工程迁过来时；注意 all 会连外部库的存量问题一起判红",
-    },
-    "MEMCHECK_IGNORE_KINDS": {
-        "level": "常用",
-        "summary": "整体忽略的泄漏类别",
-        "derive": "缺省取 valgrind 模块的 DEFAULT_IGNORE_KINDS",
-        "when": "某类别的分类随时序抖动、门禁红绿翻脸时",
-        "code": '["still-reachable", "possibly-lost"]',
-        "note": ["possibly-lost 在含定时器/异步事件循环的测试里随时序漂移，",
-                 "真正确凿的泄漏由 definitely-lost / invalid-* / uninit-* 兜住。"],
-    },
-    "MEMCHECK_REPEAT": {
-        "level": "调参",
-        "summary": "重复运行次数，取交集判定：每次都判域内的才算失败",
-        "derive": "缺省 1",
-        "when": "测试含定时器/异步、结果抖动时设 2；温",
-        "code": "1",
-        "note": ["静态链接 vendored 库的工程推荐与 MEMCHECK_IGNORE_SYMBOLS 一起配：",
-                 "只配 REPEAT 只压掉\"这次没复现\"的部分，每次都能复现的冻结库符号",
-                 "要靠 IGNORE_SYMBOLS 摘出去，缺一不可。"],
-    },
-    "MEMCHECK_IGNORE_SYMBOLS": {
-        "level": "调参",
-        "summary": "符号级忽略（去修饰符号前缀，如 \"NormalButton::\"）",
-        "derive": "缺省空",
-        "when": "静态链接 vendored 库、帧归属落在项目自己的产物上时",
-        "note": ["前缀清单从摘要的\"域内条目按符号前缀聚合 Top N\"一行里抄。"],
-    },
-    "MEMCHECK_IGNORE_OBJECTS": {
-        "level": "调参",
-        "summary": "归属对象级忽略（可执行文件或库名），命中即判域外",
-        "derive": "缺省空",
-        "when": "整个库不计入失败时",
-    },
-    "MEMCHECK_SKIP_TARGETS": {
-        "level": "调参",
-        "summary": "命中的测试目标整体不跑内存检查，汇总里标 skipped",
-        "derive": "缺省空",
-        "when": "个别很慢或环境不适配的测试目标",
-    },
-    "MEMCHECK_SUPPRESSIONS": {
-        "level": "调参",
-        "summary": "valgrind 抑制文件，可选精修",
-        "derive": "缺省空；不配也能用，外部库泄漏由归因规则判域外",
-        "when": "归因规则不够用、需要写抑制 DSL 时",
-    },
-    "ASAN_BUILD_DIR": {
-        "level": "调参",
-        "summary": "asan 路线的影子构建目录（asan 不编译主产物）",
-        "derive": "缺省 BUILD_DIR/tests_asan",
-        "when": "asan 产物要放在别处时",
-    },
-    "ASAN_COMMAND": {
-        "level": "调参",
-        "summary": "asan 路线执行的测试指令",
-        "derive": "缺省由 MEMCHECK_COMMAND 换 BUILD_DIR 前缀推导",
-        "when": "要另指别的程序时（如 [ASAN_BUILD_DIR / \"run_tests\"]）",
-    },
-    "ASAN_CXXFLAGS": {
-        "level": "调参",
-        "summary": "注入影子构建的编译参数",
-        "derive": "缺省 -fsanitize=address -fno-omit-frame-pointer",
-        "when": "需要额外的净化器选项时",
-        "code": '["-fsanitize=address", "-fno-omit-frame-pointer"]',
-    },
-    "ASAN_LDFLAGS": {
-        "level": "调参",
-        "summary": "注入影子构建的链接参数",
-        "derive": "缺省 -fsanitize=address",
-        "when": "需要额外的净化器链接选项时",
-        "code": '["-fsanitize=address"]',
-    },
-    "ASAN_LEAK_ARGS": {
-        "level": "调参",
-        "summary": "通道 B（泄漏扫描）追加的参数，用来只跑无 GUI 用例",
-        "derive": "缺省空",
-        "when": "Qt GUI 测试被 LSan 收尾扫描打成 fatal 时（如 [\"--no-gui\"]）",
-    },
-    "ASAN_SUPPRESSIONS": {
-        "level": "调参",
-        "summary": "通道 B 的泄漏抑制清单，切到 asan 前必须先落一份",
-        "derive": "缺省空；asan 路线缺清单会直接终止（ASAN_SUPPRESSIONS_MISSING）",
-        "when": "启用 asan 路线时",
-    },
-    "ASAN_ERROR_MARKS": {
-        "level": "调参",
-        "summary": "内存类指纹：命中即判失败，任何 xfail 登记都不豁免",
-        "derive": "缺省覆盖常见 ASan/LSan 指纹",
-        "when": "新版本 Asan 的输出格式变化时",
-        "code": ('[\n    "ERROR: AddressSanitizer", "ERROR: LeakSanitizer",\n'
-                 '    "SUMMARY: AddressSanitizer", "SUMMARY: LeakSanitizer",\n'
-                 '    "Direct leak", "Indirect leak", "heap-use-after-free",\n'
-                 '    "heap-buffer-overflow", "double-free",'
-                 ' "SEGV on unknown address",\n]'),
-    },
-    "XFAIL_FILE": {
-        "level": "常用",
-        "summary": "已登记存量问题的清单",
-        "derive": "缺省 ROOT/ci.xfail（文件不存在等于没有清单）",
-        "when": "首次接入，把存量问题一次性落成基线时",
-    },
-    "XFAIL_STRICT": {
-        "level": "调参",
-        "summary": "登记项已修复或复核到期即判失败，防止清单腐化",
-        "derive": "缺省 False",
-        "when": "想强制清理已修的登记项时",
-    },
-    "DIAGNOSTIC_LEVEL": {
-        "level": "常用",
-        "summary": "成功阶段回显的诊断门槛 off/note/warning/error",
-        "derive": "缺省 error",
-        "when": "想让告警也上屏时",
-    },
-    "DIAGNOSTIC_SOURCES": {
-        "level": "常用",
-        "summary": "诊断归属：project 只显示项目自身的，all 连第三方头一并显示",
-        "derive": "缺省 project",
-        "when": "需要排查第三方头文件的问题时",
-    },
-    "DIAGNOSTIC_IGNORE": {
-        "level": "调参",
-        "summary": "命中即静默的诊断正则",
-        "derive": "缺省空",
-        "when": "屏蔽工具或第三方库的固定噪声",
-    },
-    "DIAGNOSTIC_DEDUP": {
-        "level": "调参",
-        "summary": "同一条诊断只显示一次，行尾标注出现次数",
-        "derive": "缺省 True",
-        "when": "想看逐条输出时关掉",
-    },
-    "FAIL_OUTPUT": {
-        "level": "调参",
-        "summary": "失败阶段的输出：summary 先列失败清单，full 全量倾倒",
-        "derive": "缺省 summary",
-        "when": "需要完整原文时",
-    },
-    "TEST_REPORT_ADAPTER": {
-        "level": "调参",
-        "summary": "测试报告适配器 auto/gtest/regex/exit-code",
-        "derive": "缺省 auto，按序试探首个命中的指纹",
-        "when": "自研 runner 用 regex，或只看退出码用 exit-code",
-    },
-    "TEST_FAIL_PATTERN": {
-        "level": "调参",
-        "summary": "regex 适配器识别失败行的正则",
-        "derive": "缺省空",
-        "when": "用 regex 适配器时",
-    },
-    "TEST_TOTAL_PATTERN": {
-        "level": "调参",
-        "summary": "regex 适配器识别总数行的正则",
-        "derive": "缺省空",
-        "when": "用 regex 适配器时",
-    },
-    "CI_LOG_DIR": {
-        "level": "常用",
-        "summary": "阶段完整输出的落盘目录，控制台被过滤的内容都能在这里查到",
-        "derive": "缺省 BUILD_DIR/ci-logs（clean 会清空构建目录但保留该目录）",
-        "when": "日志要放别处、或与构建产物分离时",
-        "code": 'BUILD_DIR / "ci-logs"',
-    },
-    "TEST_ENV": {
-        "level": "调参",
-        "summary": "注入测试子进程的环境变量",
-        "derive": "缺省空",
-        "when": "GUI 项目无头运行需要 QT_QPA_PLATFORM=offscreen 时",
-    },
-    "MEMCHECK_ENV": {
-        "level": "调参",
-        "summary": "注入内存检查子进程的环境变量",
-        "derive": "缺省继承 TEST_ENV",
-        "when": "内存检查需要不同环境时",
-    },
-    "STEPS_DEFAULT": {
-        "level": "常用",
-        "summary": "ci.py 默认跑哪些阶段，None 表示全部",
-        "derive": "缺省 None",
-        "when": "某台机器上有些阶段本就跑不了（如无 clang 的 el6）时列出来",
-        "note": ['例: STEPS_DEFAULT = ["clean", "build", "build_test",',
-                 '                     "run_test", "memcheck"]'],
-    },
-    "SOURCE_ENCODING": {
-        "level": "常用",
-        "summary": "改写源码时的编码判定",
-        "derive": '缺省 "utf-8"＝只认 UTF-8（含 BOM），判定不出的文件一律只读',
-        "when": '老编码工程（GBK/GB18030）写编码名，或写 "auto" 启用候选列表',
-    },
-    "SOURCE_ENCODING_CANDIDATES": {
-        "level": "调参",
-        "summary": "候选编码列表，仅 SOURCE_ENCODING=\"auto\" 时启用",
-        "derive": "缺省空＝不猜 GBK",
-        "when": "老编码工程且不确定具体编码时",
-        "note": ["猜错比跳过危险得多——跳过只是不排版，猜错是把中文注释永久写坏。"],
-    },
-}
-
-# 内存检查的两条路线：valgrind 归因，或 ASan+LSan 双通道
 MEMCHECK_TOOLS = ("valgrind", "asan")
 
 class Config(object):
-    """取自 config/config.py 的项目配置，路径均为绝对路径。
+    """一次运行用到的项目配置，路径均为绝对路径。
 
     root 是被 CI 的项目根，通常与 cxx_ci 同级；其余路径都以它为基准。
     """
@@ -1035,7 +680,7 @@ def _unknown_key_names(declared):
     只在这里判"认识不认识"：审计要用它决定是否判错字，advise 要用它提醒，
     两处口径必须同一份。
     """
-    known = set(CONFIG_METADATA) | set(NON_CONFIG_KEYS) | set(
+    known = set(DEFAULTS) | set(REQUIRED) | set(NON_CONFIG_KEYS) | set(
         KEYS_OUTSIDE_METADATA)
     return sorted(name for name in declared
                   if name.isupper() and name not in known)
@@ -1047,7 +692,7 @@ def load_config(path=None):
     if not target.exists():
         return None, CONFIG_NOT_FOUND, (
             "找不到配置文件: " + str(target)
-            + "\n请把 config.py.example 复制为 config.py 后按需修改")
+            + "\n请从 config-example/ci_config.py 复制一份配置后按需修改")
     module, code, message = _load_module(target)
     if code != OK:
         return None, code, message
@@ -1154,10 +799,7 @@ def load_config(path=None):
     return config, OK, ""
 
 
-# ------------------------------------------------------------- 元数据派生
-#
-# 唯一的配置事实源就是上面的 CONFIG_METADATA 与 SECTIONS：config.py.example 与
-# ci.py --help-config 都由它们生成，二者不会与实现分叉。
+# ------------------------------------------------------------- 配置键
 
 
 def config_keys():
@@ -1170,143 +812,25 @@ def config_keys():
     return set(DEFAULTS) | set(REQUIRED) | set(["FROZEN"])
 
 
-def ordered_keys():
-    """SECTIONS 里出现过的键，按分节顺序展开。"""
-    result = []
-    for _title, names in SECTIONS:
-        result.extend(names)
-    return result
-
-
 def example_path():
-    """仓库自带的示例配置位置。"""
-    return TOOL_ROOT / "config" / "config.py.example"
+    """仓库自带的示例配置位置（手写维护）。
 
-
-# 生成 example 的固定前言：docstring、导入、契约版本与工具目录。ROOT 等要留到
-# "工程"分节里再写，好让分节顺序决定阅读顺序。
-_EXAMPLE_HEADER = '''"""项目配置。
-
-本文件由 ci/lib/config.py 的元数据生成，**请勿手改**：要改说明改元数据表，要改
-取值就复制成 config/config.py 再改。复制方法：
-
-    cp config/config.py.example config/config.py
-
-路径一律用 ROOT / "..." 书写，与运行时的当前工作目录无关；也可直接写绝对路径。
-"""
-
-from pathlib import Path
-
-# 与另一个项目（standardize）之间的契约版本。两侧各自声明，各侧入口在加载配置
-# 时都拿它与本工具实现比对；不一致说明配置与工具取自不同代，直接拒绝执行。
-# 不写则取工具缺省并静默通过。
-CONTRACT_VERSION = {contract}
-
-# 本文件所在的工具目录，即 cxx_ci 自身
-TOOL_ROOT = Path(__file__).resolve().parents[1]
-'''
-
-
-def _example_entry(name):
-    """渲染一个配置项的注释块，登记了 code 的项再附一行赋值。"""
-    item = CONFIG_METADATA[name]
-    lines = ["# [{}] {}".format(item["level"], item["summary"]),
-             "#   推导: " + item["derive"],
-             "#   何时要动: " + item["when"]]
-    # 调参层必须能回答"动完怎么验证"：改了一个旋钮却不知道怎么算改对了，
-    # 等于把排查成本留给下一个人
-    if item["level"] == "调参":
-        lines.append("#   动完怎么验证: " + verify_hint(name))
-    for note in item.get("note") or ():
-        lines.append("# " + note)
-    code = item.get("code")
-    if code is not None:
-        lines.append("{} = {}".format(name, code))
-    return lines
-
-
-# "动完怎么验证"：调参层的每一项都要能回答它。写不出验证方式的配置项
-# 是不该存在的——它要么该删，要么该有缺省。键名 → 验证方式；没列到的项按
-# 通用兜底（改完重跑一次门禁），但通用兜底只覆盖"读一遍就懂"的那些项。
-VERIFY_HINTS = {
-    "MEMCHECK_REPEAT": "把 MEMCHECK_REPEAT 临时改成 3 再跑一次 memcheck，"
-                       "抖动的条目会自己浮出来；稳定后改回 1",
-    "MEMCHECK_IGNORE_KINDS": "改完重跑 memcheck，看被忽略的类别是不是真的"
-                             "不该算问题（忽略项在摘要里单列）",
-    "MEMCHECK_IGNORE_SYMBOLS": "改完重跑 memcheck，确认域内问题数下降且"
-                               "没有把项目自己的符号一起忽略掉",
-    "MEMCHECK_SCOPE": "改成 project 后重跑，第三方库引发的问题应不再计入；"
-                      "若全绿了，说明之前红的都是域外问题",
-    "TIDY_HEADER_FILTER": "重跑 style，看诊断条数：突然涨很多说明写太宽"
-                          "（把系统头文件也圈进来了），一条不涨可能写太窄",
-    "DIAGNOSTIC_LEVEL": "改成 warning 重跑，看 note 级诊断消失且结论不变",
-    "DIAGNOSTIC_SOURCES": "改成 project 重跑，第三方诊断应只显示不再计入",
-    "DIAGNOSTIC_DEDUP": "关掉重跑，同一条诊断重复出现的次数会显出来",
-    "CI_LOG_DIR": "改完跑一个会失败的阶段，确认日志落在新目录且摘要里的"
-                  "路径能打开",
-    "SOURCE_ENCODING": "改完跑 format --apply，中文注释应保持原样；"
-                       "拿一份 GBK 文件试最直接",
-    "XFAIL_STRICT": "打开后重跑，已修复的登记项会被点名——那是该清理清单了",
-}
-VERIFY_FALLBACK = "改完重跑一次门禁（run_all.sh），确认结论与预期一致"
-
-
-def verify_hint(name):
-    """这一项"动完怎么验证"。"""
-    return VERIFY_HINTS.get(name, VERIFY_FALLBACK)
-
-
-def render_example():
-    """生成 config.py.example 的完整文本。
-
-    分节顺序取自 SECTIONS，项内顺序取自各分节；只有登记了 code 的项才写出赋值
-    行，其余项由注释说明推导规则，使用时按需再补。
+    工具既可能直接位于仓库根（部署到项目里的拷贝），也可能位于仓库根的
+    cxx_ci/ 子目录（开发仓），因此向上找一层含 config-example/ci_config.py 的目录。
     """
-    lines = _EXAMPLE_HEADER.format(
-        contract=CONTRACT_VERSION).rstrip("\n").split("\n")
-    for title, names in SECTIONS:
-        lines.append("")
-        lines.append("# ---- " + title)
-        lines.append("")
-        for name in names:
-            lines.extend(_example_entry(name))
-            lines.append("")
-    while lines and not lines[-1].strip():
-        lines.pop()
-    return "\n".join(lines) + "\n"
+    here = TOOL_ROOT
+    for _ in range(4):
+        candidate = here / "config-example" / "ci_config.py"
+        if candidate.is_file():
+            return candidate
+        here = here.parent
+    return TOOL_ROOT / "config-example" / "ci_config.py"
 
 
-def help_config_text():
-    """`--help-config` 的正文：按必需性分层列出每项的语义、推导与改动时机。
-
-    与 example 同源，因此文档不会与实现分叉；"未写的项取什么缺省"在这里能一眼
-    看全，不必去读加载器代码。
-    """
-    lines = ["配置项：按必需性分层列出；未写的项一律按\"推导\"取缺省，",
-             "改哪一项看\"何时要动\"。完整示例见 config/config.py.example。"]
-    for level in LEVELS:
-        lines.append("")
-        lines.append("== {} ==".format(level))
-        for name in ordered_keys():
-            item = CONFIG_METADATA[name]
-            if item["level"] != level:
-                continue
-            lines.append(name)
-            lines.append("    语义: " + item["summary"])
-            lines.append("    推导: " + item["derive"])
-            lines.append("    何时要动: " + item["when"])
-            if item["level"] == "调参":
-                lines.append("    动完怎么验证: " + verify_hint(name))
-    return "\n".join(lines) + "\n"
-
-
-# ------------------------------------------------------------- 建议性检查
-
-# 配置对象上不是配置项的公开名（审计与"认不认识"判定都要跳过）
+# 配置对象上不是配置项的公开名（"认不认识"判定要跳过）
 NON_CONFIG_KEYS = ("warnings", "unknown_keys", "declared_keys", "notes")
 
-# 由本模块单独处理、因此不进 CONFIG_METADATA 的配置项：契约版本在 check_contract
-# 里读，与"有什么开关"是两回事
+# 由本模块单独处理、不算配置开关的项：契约版本在 check_contract 里读
 KEYS_OUTSIDE_METADATA = ("CONTRACT_VERSION",)
 
 

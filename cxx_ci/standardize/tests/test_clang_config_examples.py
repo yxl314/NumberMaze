@@ -22,7 +22,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from cxx_standardize import prefix  # noqa: E402
 from cxx_standardize.tidy import LOCAL_KINDS  # noqa: E402
 
-EXAMPLES = Path(__file__).resolve().parents[2] / "examples" / "clang-config"
+def _examples_dir():
+    here = Path(__file__).resolve().parent
+    for _ in range(5):
+        candidate = here / "config-example" / "clang-config"
+        if candidate.is_dir():
+            return candidate
+        here = here.parent
+    raise AssertionError("找不到 config-example/clang-config")
+
+
+EXAMPLES = _examples_dir()
 CLANG_TIDY = EXAMPLES / ".clang-tidy"
 CLANG_FORMAT = EXAMPLES / ".clang-format"
 TABLES = EXAMPLES / "naming-tables.py"

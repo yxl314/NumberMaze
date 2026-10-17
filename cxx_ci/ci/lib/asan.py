@@ -488,8 +488,8 @@ def run(config, args):
     for note in notes:
         output.out(protocol.summary(note))
     if code != errors.OK:
-        output.err("xfail 清单有已修复或已到期的登记项，请清理后重跑")
+        output.err("xfail 清单有已修复的登记项，请清理后重跑")
         output.out(protocol.summary(
-            "xfail 清单有已修复或已到期的登记项，请清理后重跑"))
+            "xfail 清单有已修复的登记项，请清理后重跑"))
         return code
     return final

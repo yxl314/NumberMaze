@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
 
 from lib import errors as errcodes  # noqa: E402
 from lib import paths, valgrind  # noqa: E402
-from lib.config import TOOL_ROOT, load_config  # noqa: E402
+from lib.config import TOOL_ROOT, example_path, load_config  # noqa: E402
 
 
 
@@ -577,8 +577,7 @@ class TestDefaultIgnoreKinds:
 
     def test_config_default_matches_the_module_constant(self):
         """缺省值只有一处定义：配置的缺省直接取自归因模块。"""
-        loaded = load_config(str(TOOL_ROOT / "config"
-                                 / "config.py.example"))[0]
+        loaded = load_config(str(example_path()))[0]
         assert list(valgrind.DEFAULT_IGNORE_KINDS) == \
             loaded.memcheck_ignore_kinds
 

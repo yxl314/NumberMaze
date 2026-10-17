@@ -16,7 +16,7 @@ from pathlib import Path
 from . import baseline, comments, fmt, log, paths
 from .errors import Code
 from . import source as source_mod
-from .style import ALL_SUFFIXES, collect_files, incremental_files
+from .style import ALL_SUFFIXES, collect_files
 
 GUIDANCE = ("若这是首次接入：`format`（不带 --apply）只看漂移不改文件；"
             "`format --accept-baseline --yes` 一次性重排并记下基线；"
@@ -113,13 +113,6 @@ def prepare(config, options, tools):
     # 头文件也要收：clang-format 没有"按 HeaderFilterRegex 顺带处理"的机制，
     # 不直接收就永远不会被排到
     files = collect_files(config, options, ALL_SUFFIXES)
-    if options.full:
-        config.incremental = False
-    # 排版不做头文件到翻译单元的映射：每个文件各自排版，改动的头文件本身就是
-    # 待排版的文件。注释保护依赖行号，也不做行级过滤
-    files, notes = incremental_files(config, options, files, None)
-    for note in notes:
-        log.out(note)
     current = baseline.fingerprint(
         tools.clang_format, fmt.version_text(tools.clang_format),
         config.format_comments, config_file)
@@ -146,9 +139,8 @@ def _scan(binary, style, files, protect, jobs, config):
         return list(pool.map(one, items))
 
 
-def check(config, options, tools, report=None):
+def check(config, options, tools):
     """预览：输出需要改动的差异，返回错误码。"""
-    stage = report.stage("format") if report is not None else None
     prepared, code, message = prepare(config, options, tools)
     if code != Code.OK:
         log.err(message)
@@ -201,9 +193,6 @@ def check(config, options, tools, report=None):
             log.out(diff_text(path, before, after).rstrip())
     if skipped:
         log.err("{} 个文件编码判定不出，保持只读（见上）".format(len(skipped)))
-        for path, _reason in skipped:
-            if stage is not None:
-                stage.add_failure(str(path), "编码判定不出，未改写")
     if problems:
         log.err("{} 个文件没能写入（见上）".format(len(problems)))
     if options.apply:
@@ -218,10 +207,6 @@ def check(config, options, tools, report=None):
                 log.err(message)
                 return code
             log.out(f"已按当前排版建立基线指纹: {path}")
-        if stage is not None:
-            stage.summary = f"已排版 {changed - len(problems)} 个文件"
-            for path in problems:
-                stage.add_failure(str(path), "没能写入（见上）")
         if problems or skipped:
             # 有文件没写成、或根本没改写时不能报成功：它们就还没排版，
             # 下一次照样会判红
@@ -231,14 +216,8 @@ def check(config, options, tools, report=None):
         log.err(f"{changed} 个文件需要排版")
         if record is None:
             log.out("本仓库还没有排版基线。" + GUIDANCE)
-        if stage is not None:
-            stage.summary = f"{changed} 个文件需要排版"
-            for path in changed_paths:
-                stage.add_failure(str(path), "需要排版")
         return Code.FORMAT_PENDING
     log.out("全部文件已符合排版")
-    if stage is not None:
-        stage.summary = "全部文件已符合排版"
     return Code.OK
 
 
@@ -257,9 +236,8 @@ def drift(binary, style, files, protect, jobs, config):
     return changed, Code.OK, ""
 
 
-def accept_baseline(config, options, tools, yes=False, report=None):
+def accept_baseline(config, options, tools, yes=False):
     """一次性切换：先给清单与样例，确认后整体重排并记下基线指纹。"""
-    stage = report.stage("format") if report is not None else None
     prepared, code, message = prepare(config, options, tools)
     if code != Code.OK:
         log.err(message)
@@ -274,8 +252,6 @@ def accept_baseline(config, options, tools, yes=False, report=None):
     if code != Code.OK:
         log.err(message)
         return code
-    if stage is not None:
-        stage.summary = f"一次性重排 {len(changed)} 个文件"
     log.out(f"一次性切换将重排 {len(changed)} 个文件，注释原样保留")
     if changed:
         log.out(f"示例差异（其余 {len(changed) - 1} 个同类）:")
@@ -286,9 +262,6 @@ def accept_baseline(config, options, tools, yes=False, report=None):
     if not _confirmed(yes, len(changed)):
         log.err("未确认，未改写任何文件")
         return Code.OK
-    if stage is not None:
-        for path, _after, _diff in changed:
-            stage.add_failure(str(path), "一次性重排")
     written = 0
     for path, after, _ in changed:
         # 一次性重排同样是"改写用户源码"，要过同一套范围判定：这条入口以前没有

@@ -315,7 +315,7 @@ class TestResolvePath:
     def test_absolute_is_kept(self):
         assert "/tmp/abs" == paths.resolve_path("/tmp/abs", "/root")
 # 仓库自带的配置模板，测试直接用它，不依赖本地 config.py
-TEMPLATE = TOOL_ROOT / "config" / "config.py.example"
+TEMPLATE = config_module.example_path()
 
 
 class TestShippedConfig:
@@ -488,7 +488,7 @@ class TestContractVersion:
         模板，它落后于实现等于把新工程直接引到旧契约上。
         """
         module, code, _ = config_module.load_module(
-            Path(TOOL_ROOT) / "config" / "config.py.example")
+            config_module.example_path())
         assert errors.OK == code
         assert config_module.CONTRACT_VERSION == config_module.contract_version(
             module)

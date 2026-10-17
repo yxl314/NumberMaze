@@ -1,16 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""standardize 侧的 doctor：回答"现在生效的是什么、上次为什么红、下一步跑什么"。
-
-与 `ci/lib/doctor.py` 是**平行实现**（两个项目互不 import）。ci 侧那份看的是构建
-与门禁，这份看的是排版 / 风格 / 命名。四段结构两侧一致，措辞也一致，好让人在两
-边看到同一套说法：
+"""standardize 侧的 doctor：回答"现在生效的是什么"。
 
     ① 环境       Python、clang 两件套的实际路径与版本、来源（pip 包 / 系统）、
                  CLANG_PREFER 生效值、平台级别与判据
     ② 生效配置   关键取值 + 每项来源（配置文件 / 推导 / 缺省）
-    ③ 上次结论   从 CI_LOG_DIR 与报告读回，按检查名与"需人工"聚合
-    ④ 下一步     具体命令，而不是让人去猜配置项名
 """
 
 from __future__ import annotations
@@ -161,127 +155,11 @@ def config_lines(config):
     return lines
 
 
-# ------------------------------------------------------------------ ③ 上次结论
-
-def _load_report(directory):
-    """最近一份报告（工具写的 JSON），没有就返回 None。"""
-    import glob
-    import json
-
-    if not directory or not os.path.isdir(directory):
-        return None
-    newest = None
-    for path in glob.glob(os.path.join(directory, "*.json")):
-        try:
-            with open(path, "r", encoding="utf-8") as handle:
-                document = json.load(handle)
-        except (IOError, OSError, ValueError):
-            # 读不出/不是 JSON：当成"这份报告不存在"跳过。doctor 是只读自检，
-            # 不能因为一份残缺的历史报告就整体失败
-            continue
-        if not isinstance(document, dict) or "report_version" not in document:
-            continue
-        if newest is None or path > newest[0]:
-            newest = (path, document)
-    return newest[1] if newest else None
-
-
-def analyse(config, log_dir=None):
-    """③ 上次结论：从报告（优先）或日志读回，聚合成"哪一类多少条"。"""
-    import glob
-
-    directory = log_dir or _report_dir(config)
-    document = _load_report(directory)
-    if document:
-        rows = []
-        for stage in document.get("stages") or []:
-            rows.append((stage.get("name", "?"), stage.get("status", "?"),
-                         _clip(stage.get("summary", ""))))
-        return {"source": "报告", "stages": rows,
-                "report": directory}
-    # 退路：日志里数一数诊断行
-    rows = []
-    if directory and os.path.isdir(directory):
-        for path in sorted(glob.glob(os.path.join(directory, "*.log"))):
-            name = os.path.basename(path)[:-4]
-            count = 0
-            try:
-                with open(path, "r", encoding="utf-8", errors="replace") as handle:
-                    for line in handle:
-                        if ": error:" in line or ": warning:" in line:
-                            count += 1
-            except (IOError, OSError):
-                # 单份日志读不出：跳过它继续数别的。doctor 是只读自检，
-                # 不能因为一份残缺日志就整体失败
-                continue
-            rows.append((name, "见日志", "{} 条诊断".format(count)))
-    return {"source": "日志" if rows else "无", "stages": rows,
-            "report": directory}
-
-
-def _report_dir(config):
-    """报告与日志所在目录：配置里的 CI_LOG_DIR 优先，其次环境变量，最后缺省。
-
-    只认环境变量时，配置里明写了 CI_LOG_DIR 的工程会被报成"还没有跑过"——而它
-    明明跑过很多次，只是日志不在缺省位置。三个真实工程都把日志放在
-    ROOT/.cxx_ci/logs，于是这一侧的上次结论永远是空的。
-    """
-    explicit = getattr(config, "log_dir", None)
-    if explicit:
-        return str(explicit)
-    from_env = os.environ.get("CXX_CI_LOG_DIR", "")
-    if from_env:
-        return from_env
-    root = str(getattr(config, "root", "") or "")
-    build = os.environ.get("CXX_CI_BUILD_DIR", "")
-    if build:
-        return os.path.join(build, "ci-logs")
-    return os.path.join(root, "build", "ci-logs") if root else ""
-
-
-def last_result_lines(config, analysis=None):
-    analysis = analysis or analyse(config)
-    lines = ["来源: {}（{}）".format(analysis["source"], analysis["report"])]
-    if not analysis["stages"]:
-        lines.append("  还没有跑过：先跑一次 `cxx-standardize` 看当前状态")
-        return lines
-    for name, status, summary in analysis["stages"]:
-        lines.append("  {:<10} {:<8} {}".format(name, status, summary))
-    return lines
-
-
-# ------------------------------------------------------------------ ④ 下一步
-
-def next_step_lines(config, analysis=None):
-    analysis = analysis or analyse(config)
-    lines = []
-    unfixed = 0
-    for _name, _status, summary in analysis["stages"]:
-        for token in str(summary).split():
-            if token.isdigit():
-                unfixed = max(unfixed, int(token))
-    lines.append("  看当前状态（只报告不改）：  cxx-standardize --config <配置> check")
-    lines.append("  一次修完（排版+风格+命名）：cxx-standardize --config <配置> --apply")
-    if unfixed:
-        # 有存量违规时给的是"把它登记成基线"，而不是让人一条条手工改
-        lines.append("  把存量登记成基线（门禁当天变绿、以后只对新问题判红）："
-                     "  cxx-standardize --config <配置> style --record")
-    else:
-        lines.append("  首次接入建议先登记存量："
-                     "  cxx-standardize --config <配置> style --record")
-    lines.append("  配置项含义与改动时机：      cxx-standardize --help-config")
-    return lines
-
-
 # ------------------------------------------------------------------ 入口
 
-def sections(config=None, log_dir=None):
-    """四段文本，每段一屏内。"""
+def sections(config=None):
+    """两段文本：环境与生效配置。"""
     result = [("① 环境", environment_lines(config))]
     if config is not None:
         result.append(("② 生效配置", config_lines(config)))
-    analysis = analyse(config, log_dir) if config is not None else None
-    if analysis is not None:
-        result.append(("③ 上次结论", last_result_lines(config, analysis)))
-        result.append(("④ 下一步", next_step_lines(config, analysis)))
     return result

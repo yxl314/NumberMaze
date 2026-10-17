@@ -9,7 +9,7 @@
     未登记的新违规照判失败；
     登记项已修复（本次没命中）则提示可移除，XFAIL_STRICT 打开时直接判失败。
 
-清单是纯文本，一行一条，`#` 起注释，行尾可写 `@YYYY-MM-DD` 作复核到期日。
+清单是纯文本，一行一条，`#` 起注释。
 两种条目：
 
     [test]     用例名                                    （与适配器报出的名字逐字相同）
@@ -25,7 +25,6 @@
 import collections
 import os
 import re
-import time
 
 from . import source
 from .errors import OK, XFAIL_BAD_FILE, XFAIL_STALE
@@ -36,13 +35,12 @@ KINDS = ("test", "memcheck")
 # 一条登记项。kind 决定 value 的含义：
 #   test     value 是用例名
 #   memcheck value 是符号前缀，或 "sig:" 加签名哈希
-Entry = collections.namedtuple("Entry", "kind value detail line review")
+Entry = collections.namedtuple("Entry", "kind value detail line")
 
 # 清单文件本体
 Registry = collections.namedtuple("Registry", "path root entries")
 
 _SECTION = re.compile(r"^\[(?P<kind>\w+)\]$")
-_REVIEW = re.compile(r"@(?P<date>\d{4}-\d{2}-\d{2})\s*$")
 # 行内注释：`#` 在行首或前面是空白才算注释，路径里的 `#` 不当注释
 _COMMENT = re.compile(r"(?:^|\s)#.*$")
 _SIG = re.compile(r"^sig:[0-9a-fA-F]{4,}$")
@@ -64,9 +62,9 @@ def _parse_entry(text, section):
     """解析一条登记项，返回 (Entry, 错误说明)。"""
     kind = _kind_of(text, section)
     if kind == "test":
-        return Entry("test", text, "", 0, ""), ""
+        return Entry("test", text, "", 0), ""
     if _SIG.match(text) or text.endswith("::"):
-        return Entry("memcheck", text, "", 0, ""), ""
+        return Entry("memcheck", text, "", 0), ""
     return None, "memcheck 条目必须是符号前缀（以 :: 结尾）或 sig:哈希: " + text
 
 
@@ -88,18 +86,10 @@ def parse(text):
                     number, line)
             section = match.group("kind")
             continue
-        review = ""
-        match = _REVIEW.search(line)
-        if match:
-            review = match.group("date")
-            line = line[:match.start()].strip()
-            if not line:
-                return None, XFAIL_BAD_FILE, "第 {} 行只有复核日期: {}".format(
-                    number, raw.strip())
         entry, message = _parse_entry(line, section)
         if entry is None:
             return None, XFAIL_BAD_FILE, "第 {} 行: {}".format(number, message)
-        entries.append(entry._replace(review=review))
+        entries.append(entry)
     return entries, OK, ""
 
 
@@ -169,11 +159,6 @@ class Checklist(object):
         return [entry for entry in self.registry.entries
                 if entry.kind in kinds and entry not in self.used]
 
-    def expired(self, today):
-        """复核到期日已过的登记项。"""
-        return [entry for entry in self.registry.entries
-                if entry.review and entry.review < today]
-
 
 def load_checklist(config):
     """按配置读取清单，返回 (Checklist, 错误码, 说明)。"""
@@ -185,7 +170,7 @@ def load_checklist(config):
     return Checklist(Registry(path, root, entries or [])), OK, ""
 
 
-def verdict(checklist, kinds, strict=False, today="", hits=()):
+def verdict(checklist, kinds, strict=False, hits=()):
     """汇总清单状态，返回 (错误码, 提示行列表)。
 
     kinds 限定本次判定覆盖的种类：没跑到的种类不能推断成"已修复"。提示行
@@ -195,18 +180,12 @@ def verdict(checklist, kinds, strict=False, today="", hits=()):
     登记清单没写、而这次真的出现了的那些。不给也能用（新增由调用方自己算），
     但把三态收在一处，两侧的"已修复 / 仍存在 / 新增"分类才有同一个口径可比。
     """
-    if not today:
-        today = time.strftime("%Y-%m-%d")
     notes = []
     stale = checklist.stale(kinds)
     for entry in stale:
         notes.append("xfail 已修复，可移除: " + describe(entry))
-    expired = checklist.expired(today)
-    for entry in expired:
-        notes.append("xfail 复核已到期（{}）: {}".format(
-            entry.review, describe(entry)))
     if hits:
-        # Entry 是 namedtuple(kind value detail line review)：登记键就是 value
+        # Entry 是 namedtuple(kind value detail line)：登记键就是 value
         registered = set()
         for entry in getattr(checklist.registry, "entries", None) or ():
             key = getattr(entry, "value", "") or ""
@@ -215,6 +194,6 @@ def verdict(checklist, kinds, strict=False, today="", hits=()):
         for key in hits:
             if key and key not in registered:
                 notes.append("xfail 新增（清单里没有）: " + str(key))
-    if strict and (stale or expired):
+    if strict and stale:
         return XFAIL_STALE, notes
     return OK, notes

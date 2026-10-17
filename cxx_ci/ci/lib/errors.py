@@ -74,7 +74,7 @@ UNKNOWN_STAGE = compose(KIND_USAGE, 6)         # 未知的阶段名
 BUILD_FILE_MISSING = compose(KIND_USAGE, 8)    # 构建文件不存在
 UNSAFE_DELETE = compose(KIND_USAGE, 10)        # 拒绝删除项目外的路径
 XFAIL_BAD_FILE = compose(KIND_USAGE, 13)       # xfail 清单语法错误
-XFAIL_STALE = compose(KIND_USAGE, 14)          # xfail 登记项已修复或复核到期
+XFAIL_STALE = compose(KIND_USAGE, 14)          # xfail 登记项已修复
 
 # ---------------------------------------------------------------- 环境依赖
 
