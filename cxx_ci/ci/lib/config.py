@@ -52,7 +52,7 @@ DEFAULT_BUILD_DIR = "build"
 
 # 未显式写出的项一律取这里的缺省，配置文件不必逐项列全
 # 测试报告适配器与编译数据库 provider 的名字，配置取值必须来自这里
-TEST_ADAPTERS = ("auto", "gtest", "qtest", "catch2", "regex", "exit-code")
+TEST_ADAPTERS = ("auto", "gtest", "regex", "exit-code")
 
 DEFAULTS = {
     # 构建与测试项：没写就按构建工具探测或缺省（见 load_config），因此缺省值
@@ -83,7 +83,6 @@ DEFAULTS = {
     "MEMCHECK_SCOPE": "project",
     "MEMCHECK_IGNORE_OBJECTS": [],
     "MEMCHECK_IGNORE_SYMBOLS": [],
-    "AUTO_IGNORE_ROOTS": True,
     # 缺省值取自 valgrind 模块，避免同一份"哪些类别不计入失败"写两处
     "MEMCHECK_IGNORE_KINDS": list(DEFAULT_IGNORE_KINDS),
     "MEMCHECK_SKIP_TARGETS": [],
@@ -93,15 +92,6 @@ DEFAULTS = {
     "TEST_ENV": {},
     "MEMCHECK_ENV": None,
     "STEPS_DEFAULT": None,
-    # 内部面边界：受管目录、允许出现 detail:: 的目录、判据、头文件扩展名
-    "BOUNDARY_DIRS": [],
-    "DETAIL_DIRS": [],
-    "DETAIL_MARK": "detail::",
-    "GUARD_EXTS": [".h", ".hh", ".hpp", ".hxx"],
-    # 配置审计：除本工具自身外还要审的项目文件、编译标准的承载变量与锁定值
-    "AUDIT_FILES_GLOBS": [],
-    "STD_VARS": [],
-    "STD_PIN": "",
     # 内存检查路线：valgrind 或 asan（影子构建 + 双通道）
     "MEMCHECK_TOOL": "valgrind",
     "ASAN_BUILD_DIR": None,
@@ -139,12 +129,10 @@ SECTIONS = (
     ("测试", ("TEST_BUILD_FILE", "TEST_BUILD_DIR", "TEST_COMMAND",
               "TEST_WORKDIR", "MEMCHECK_COMMAND")),
     ("范围与禁改区", ("SCOPE", "FROZEN", "WHITELIST", "BLACKLIST")),
-    ("内部面边界（boundary）", ("BOUNDARY_DIRS", "DETAIL_DIRS", "DETAIL_MARK",
-                                "GUARD_EXTS")),
     ("内存检查", ("MEMCHECK_TOOL", "MEMCHECK_SCOPE", "MEMCHECK_IGNORE_KINDS",
                   "MEMCHECK_REPEAT", "MEMCHECK_IGNORE_SYMBOLS",
                   "MEMCHECK_IGNORE_OBJECTS", "MEMCHECK_SKIP_TARGETS",
-                  "MEMCHECK_SUPPRESSIONS", "AUTO_IGNORE_ROOTS",
+                  "MEMCHECK_SUPPRESSIONS",
                   "ASAN_BUILD_DIR", "ASAN_COMMAND", "ASAN_CXXFLAGS",
                   "ASAN_LDFLAGS", "ASAN_LEAK_ARGS", "ASAN_SUPPRESSIONS",
                   "ASAN_ERROR_MARKS")),
@@ -154,7 +142,6 @@ SECTIONS = (
               "TEST_FAIL_PATTERN", "TEST_TOTAL_PATTERN", "CI_LOG_DIR",
               "TEST_ENV", "MEMCHECK_ENV", "STEPS_DEFAULT")),
     ("源码编码（source）", ("SOURCE_ENCODING", "SOURCE_ENCODING_CANDIDATES")),
-    ("配置审计（audit）", ("AUDIT_FILES_GLOBS", "STD_VARS", "STD_PIN")),
 )
 
 CONFIG_METADATA = {
@@ -272,31 +259,6 @@ CONFIG_METADATA = {
         "when": "老配置迁到 SCOPE 的过程中",
         "code": "[]",
     },
-    "BOUNDARY_DIRS": {
-        "level": "调参",
-        "summary": "受管源目录：其下检查 detail:: 归属与头文件宏守卫",
-        "derive": "留空＝不做这项检查",
-        "when": "有 internal 分层纪律的工程",
-    },
-    "DETAIL_DIRS": {
-        "level": "调参",
-        "summary": "允许出现 detail:: 的目录",
-        "derive": "留空＝任何地方出现 detail:: 都判违规",
-        "when": "有 internal 分层纪律的工程",
-    },
-    "DETAIL_MARK": {
-        "level": "调参",
-        "summary": "归属标记的写法",
-        "derive": '缺省 "detail::"',
-        "when": "工程的内部命名空间习惯不同时",
-    },
-    "GUARD_EXTS": {
-        "level": "调参",
-        "summary": "需要检查宏守卫的头文件扩展名",
-        "derive": "缺省 .h/.hh/.hpp/.hxx",
-        "when": "工程用别的头文件后缀时",
-        "code": '[".h", ".hh", ".hpp", ".hxx"]',
-    },
     "MEMCHECK_TOOL": {
         "level": "常用",
         "summary": "内存检查路线：valgrind（深度归因）或 asan（快，适合日常）",
@@ -352,12 +314,6 @@ CONFIG_METADATA = {
         "summary": "valgrind 抑制文件，可选精修",
         "derive": "缺省空；不配也能用，外部库泄漏由归因规则判域外",
         "when": "归因规则不够用、需要写抑制 DSL 时",
-    },
-    "AUTO_IGNORE_ROOTS": {
-        "level": "调参",
-        "summary": "自动探测外部代码根（cmake 缓存前缀、QT_INSTALL_LIBS、/usr/lib*）",
-        "derive": "缺省 True",
-        "when": "探测误伤了项目自己的库时关掉",
     },
     "ASAN_BUILD_DIR": {
         "level": "调参",
@@ -452,7 +408,7 @@ CONFIG_METADATA = {
     },
     "TEST_REPORT_ADAPTER": {
         "level": "调参",
-        "summary": "测试报告适配器 auto/gtest/qtest/catch2/regex/exit-code",
+        "summary": "测试报告适配器 auto/gtest/regex/exit-code",
         "derive": "缺省 auto，按序试探首个命中的指纹",
         "when": "自研 runner 用 regex，或只看退出码用 exit-code",
     },
@@ -508,25 +464,6 @@ CONFIG_METADATA = {
         "when": "老编码工程且不确定具体编码时",
         "note": ["猜错比跳过危险得多——跳过只是不排版，猜错是把中文注释永久写坏。"],
     },
-    "AUDIT_FILES_GLOBS": {
-        "level": "调参",
-        "summary": "除工具自身外还要审计的项目文件（相对 ROOT 的 glob）",
-        "derive": "缺省空",
-        "when": "项目自己的脚本也要受配置纪律约束时",
-    },
-    "STD_VARS": {
-        "level": "调参",
-        "summary": "编译标准的承载变量（qmake 按 mkspec 二选一）",
-        "derive": "缺省空＝不做这项检查",
-        "when": "工程用 STD_PIN 钉住编译标准时",
-    },
-    "STD_PIN": {
-        "level": "调参",
-        "summary": "编译标准的锁定值，可写成 \"变量名=取值\"",
-        "derive": "缺省空＝不锁",
-        "when": "防止别处的 -std= 覆盖全局标准时",
-        "note": ["动机是真实事故：.pro 注释里写的 -std= 示例曾被 qmake 静默当真。"],
-    },
 }
 
 # 内存检查的两条路线：valgrind 归因，或 ASan+LSan 双通道
@@ -548,13 +485,11 @@ class Config(object):
                  diagnostic_level, diagnostic_sources,
                  diagnostic_ignore, diagnostic_dedup, fail_output, log_dir,
                  test_report_adapter, test_fail_pattern, test_total_pattern,
-                 memcheck_scope, memcheck_ignore_objects, auto_ignore_roots,
+                 memcheck_scope, memcheck_ignore_objects,
                  memcheck_ignore_kinds, memcheck_skip_targets,
                  memcheck_ignore_symbols, memcheck_repeat,
                  xfail_file, xfail_strict,
                  test_env, memcheck_env, steps_default,
-                 boundary_dirs, detail_dirs, detail_mark, guard_exts,
-                 audit_files_globs, std_vars, std_pin,
                  memcheck_tool, asan_build_dir, asan_command, asan_cxxflags,
                  asan_ldflags, asan_leak_args, asan_suppressions,
                  asan_error_marks):
@@ -588,7 +523,6 @@ class Config(object):
         self.test_total_pattern = test_total_pattern
         self.memcheck_scope = memcheck_scope
         self.memcheck_ignore_objects = memcheck_ignore_objects
-        self.auto_ignore_roots = auto_ignore_roots
         self.memcheck_ignore_kinds = memcheck_ignore_kinds
         self.memcheck_skip_targets = memcheck_skip_targets
         self.memcheck_ignore_symbols = memcheck_ignore_symbols
@@ -598,13 +532,6 @@ class Config(object):
         self.test_env = test_env
         self.memcheck_env = memcheck_env
         self.steps_default = steps_default
-        self.boundary_dirs = boundary_dirs
-        self.detail_dirs = detail_dirs
-        self.detail_mark = detail_mark
-        self.guard_exts = guard_exts
-        self.audit_files_globs = audit_files_globs
-        self.std_vars = std_vars
-        self.std_pin = std_pin
         self.memcheck_tool = memcheck_tool
         self.asan_build_dir = asan_build_dir
         self.asan_command = asan_command
@@ -1067,7 +994,17 @@ def check_contract(module):
     猜怎么兼容，不如当场拒绝并让人对齐到同一份 CONTRACT.md。
     """
     declared = getattr(module, "CONTRACT_VERSION", None)
-    if not isinstance(declared, int) or isinstance(declared, bool):
+    if isinstance(declared, bool):
+        return CONTRACT_MISMATCH, (
+            "CONTRACT_VERSION 写成了布尔值；请写整数（当前契约是 {}）"
+            .format(CONTRACT_VERSION))
+    if isinstance(declared, float) or (
+            isinstance(declared, str) and declared.strip()):
+        # 写成 2.0 或 "2" 时被当成"没写"静默放行，而契约是"一旦写了就必须一致"
+        return CONTRACT_MISMATCH, (
+            "CONTRACT_VERSION 写成了 {}（{!r}）；请写整数，当前契约是 {}"
+            .format(type(declared).__name__, declared, CONTRACT_VERSION))
+    if not isinstance(declared, int):
         return OK, ""
     if declared == CONTRACT_VERSION:
         return OK, ""
@@ -1176,7 +1113,6 @@ def load_config(path=None):
         test_total_pattern=_optional_text(reader, "TEST_TOTAL_PATTERN"),
         memcheck_scope=_choice(reader, "MEMCHECK_SCOPE", ("project", "all")),
         memcheck_ignore_objects=_path_item_list(reader, "MEMCHECK_IGNORE_OBJECTS"),
-        auto_ignore_roots=_flag(reader, "AUTO_IGNORE_ROOTS"),
         memcheck_ignore_kinds=_text_list(reader, "MEMCHECK_IGNORE_KINDS"),
         memcheck_skip_targets=_path_item_list(reader, "MEMCHECK_SKIP_TARGETS"),
         memcheck_ignore_symbols=_text_list(reader, "MEMCHECK_IGNORE_SYMBOLS"),
@@ -1186,13 +1122,6 @@ def load_config(path=None):
         test_env=_mapping(reader, "TEST_ENV"),
         memcheck_env=_mapping(reader, "MEMCHECK_ENV") if reader.has("MEMCHECK_ENV") else None,
         steps_default=_text_list(reader, "STEPS_DEFAULT") or None,
-        boundary_dirs=_path_list(reader, "BOUNDARY_DIRS"),
-        detail_dirs=_path_list(reader, "DETAIL_DIRS"),
-        detail_mark=_text(reader, "DETAIL_MARK"),
-        guard_exts=_text_list(reader, "GUARD_EXTS"),
-        audit_files_globs=_text_list(reader, "AUDIT_FILES_GLOBS"),
-        std_vars=_text_list(reader, "STD_VARS"),
-        std_pin=_optional_text(reader, "STD_PIN"),
         memcheck_tool=_choice(reader, "MEMCHECK_TOOL", MEMCHECK_TOOLS),
         asan_build_dir=_optional_absolute(reader, "ASAN_BUILD_DIR"),
         asan_command=_optional_command(reader, "ASAN_COMMAND"),
@@ -1228,8 +1157,7 @@ def load_config(path=None):
 # ------------------------------------------------------------- 元数据派生
 #
 # 唯一的配置事实源就是上面的 CONFIG_METADATA 与 SECTIONS：config.py.example 与
-# ci.py --help-config 都由它们生成，一致性测试断言"生成结果 == 磁盘上的 example"。
-# 新增一个配置项却没登记元数据，测试当场变红——文档漂移因此不可能发生。
+# ci.py --help-config 都由它们生成，二者不会与实现分叉。
 
 
 def config_keys():
@@ -1237,7 +1165,7 @@ def config_keys():
 
     等于"有缺省的项 + 必需项 + FROZEN"：FROZEN 既不在 REQUIRED（缺省空即可）
     也不在 DEFAULTS（两侧共用、语义特殊），但它可以写，因此单列。元数据必须与
-    它逐项对齐（见 test_config_metadata）。
+    它逐项对齐。
     """
     return set(DEFAULTS) | set(REQUIRED) | set(["FROZEN"])
 

@@ -1,9 +1,5 @@
 """排版基线的指纹与一次性切换。
 
-`protect-column` 要求行尾注释的列号在排版前后不变，存量仓库不可能天生满足，
-首次接入必然被拒。这不是工具坏了，而是"基线切换"的一次性动作没做完：本模块
-记录那次切换的指纹，让"第一次"和"之后每次"有可区分的依据。
-
 指纹由三部分组成：clang-format 的版本、注释模式、排版配置内容。任一变化都会
 让排版结果不同——同一份输入在不同主版本下判定不一致，同一个工具换一份
 `.clang-format` 会整仓重排，因此只记版本号不够。配置摘要算的是文件内容，
@@ -15,6 +11,7 @@ import json
 import os
 from pathlib import Path
 
+from . import source
 from .errors import Code
 
 # 基线记录的固定文件名，放在日志目录下（清理阶段会保留该目录）
@@ -156,9 +153,13 @@ def write(log_dir: Path | str | None,
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         text = json.dumps(record, indent=2, sort_keys=True) + "\n"
-        path.write_text(text, encoding="utf-8")
     except (OSError, ValueError, TypeError) as exc:
         return None, Code.BASELINE_UNWRITABLE, f"无法写入排版基线: {path}: {exc}"
+    # 基线是"排版回到过哪里"的唯一凭据：写一半比不写更坏——下一次运行会拿半截
+    # JSON 去解析，报"结构损坏"，而原来的基线已经没了
+    code, message = source.write_bytes(path, text.encode("utf-8"))
+    if code != 0:
+        return None, Code.BASELINE_UNWRITABLE, f"无法写入排版基线: {message}"
     return path, Code.OK, ""
 
 

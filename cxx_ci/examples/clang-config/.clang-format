@@ -1,0 +1,123 @@
+# C/C++ 排版规范（示例，clang-format 17 校准）
+#
+# 这份文件是**起点不是终点**：每一条都写了为什么这么定，改之前先读那一条。
+# 本工程被 cxx_ci/standardize 读取（配置项 CLANG_FORMAT_CONFIG），也可以单独
+# 用 `clang-format --style=file` 直接跑。
+#
+# 与它配套的是同目录的 .clang-tidy（检查与命名）和 README.md（怎么落地）。
+---
+Language: Cpp
+
+# ---------------------------------------------------------------- 基础
+# 4 空格缩进、禁 Tab、行宽 120。缩进宽度与 TabWidth 同时给：只给 IndentWidth
+# 时，别人编辑器里的 Tab 仍按 8 列显示，对齐会当场错位。
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 120
+
+# 访问修饰符顶格，成员缩进 4 格。
+# 负值表示"相对类体反向偏移"：默认的 +4 会把 public: 缩进到与成员齐平。
+AccessModifierOffset: -4
+
+# ---------------------------------------------------------------- 大括号
+# 一律 Allman：类/结构体/函数/控制语句的左括号都另起一行。
+# 这不是"风格偏好"而是可读性取舍——另起一行让块边界与缩进无关，改缩进设置不会
+# 让代码看起来换了一层。
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: true
+  AfterStruct: true
+  AfterUnion: true
+  AfterFunction: true
+  AfterEnum: true
+  AfterNamespace: true
+  # Always 而不是 true：if/for/while 体的左括号也换行。给 true 时单语句体仍会
+  # 写成 `if (x) {`，同一份文件里两种形态并存
+  AfterControlStatement: Always
+  AfterCaseLabel: true
+  AfterExternBlock: true
+  BeforeCatch: true
+  BeforeElse: true
+  BeforeLambdaBody: true
+  BeforeWhile: true
+  IndentBraces: false
+  # 空函数体/空结构体/空命名空间保持单行：空的东西摊成三行只是噪声
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: false
+
+# ---------------------------------------------------------------- 指针与引用
+# `int* p` 而不是 `int *p`：符号贴类型名。DerivePointerAlignment 必须显式关掉，
+# 否则 clang-format 会按文件里出现最多的写法**自己改主意**，同一份配置在不同
+# 文件上给出不同结果
+PointerAlignment: Left
+DerivePointerAlignment: false
+
+# ---------------------------------------------------------------- 列对齐
+# 连续声明与连续赋值按最长左值补齐。AcrossEmptyLines/AcrossComments 打开表示
+# 空行与注释不打断分组——不打开时，一句注释就把整组对齐拆散，看起来像故意的
+AlignConsecutiveDeclarations:
+  Enabled: true
+  AcrossEmptyLines: true
+  AcrossComments: true
+AlignConsecutiveAssignments:
+  Enabled: true
+  AcrossEmptyLines: true
+  AcrossComments: true
+
+# ---------------------------------------------------------------- 断行
+# 超长调用：左括号后逐参换行并与括号对齐。BinPack* 关掉是刻意的——打开时
+# clang-format 会把尽可能多的参数塞进第一行，参数一多就变成参差不齐的"俄罗斯
+# 方块"，逐个参数换行才好作逐行 diff
+AlignAfterOpenBracket: Align
+BinPackArguments: false
+BinPackParameters: false
+
+# ---------------------------------------------------------------- 短语句
+# 单行语句一律不压缩，保持完整块结构。
+# AllowShortFunctionsOnASingleLine 给 Empty 而不是 Never：空函数体留在
+# `void f() {}` 一行，有内容的函数一律展开
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortBlocksOnASingleLine: Never
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortEnumsOnASingleLine: false
+
+# ---------------------------------------------------------------- 预处理
+# 指令不缩进；include 保持书写顺序与分组，不自动排序。
+# SortIncludes 是取舍：自动排序会动到"有顺序含义的 include"（Qt 的 moc 头、
+# 平台条件包含），一次排版就把人排好的顺序打乱且看不出原因。要自动排序的团队
+# 把它改成 true，并确认没有依赖顺序的包含
+IndentPPDirectives: None
+IndentCaseLabels: false
+SortIncludes: false
+IncludeBlocks: Preserve
+
+# ---------------------------------------------------------------- 注释
+# ReflowComments: false —— 排版**不碰注释正文**。注释是给人读的，重新折行会
+# 把手工排的表、ASCII 图、对齐的字段说明全部压散，且不可逆
+ReflowComments: false
+# 行尾注释按整组对齐到统一列。与上一条是一对：正文不重排，但整组对齐要管，
+# 否则同一块的注释列号参差不齐。改 false 会把已有对齐压散
+AlignTrailingComments: true
+SpacesBeforeTrailingComments: 1
+MaxEmptyLinesToKeep: 1
+KeepEmptyLinesAtTheStartOfBlocks: true
+EmptyLineBeforeAccessModifier: Leave
+
+# ---------------------------------------------------------------- 空格细节
+# 构造函数初始化列表：冒号前断行
+BreakConstructorInitializers: BeforeColon
+ConstructorInitializerIndentWidth: 4
+# `LayoutNode(...):layoutType(...)` —— 冒号前不留空格
+SpaceBeforeCtorInitializerColon: false
+# `class CardComboBox : public QComboBox` —— 继承冒号前留空格
+SpaceBeforeInheritanceColon: true
+# 只在控制语句的括号前留空格：`if (x)` 留、`f(x)` 不留
+SpaceBeforeParens: ControlStatements
+# C 风格转型后不留空格：`(int)x`
+SpaceAfterCStyleCast: false
+Cpp11BracedListStyle: true

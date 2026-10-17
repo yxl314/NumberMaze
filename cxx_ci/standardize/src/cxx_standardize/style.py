@@ -8,7 +8,6 @@
 `VERIFY_COMMAND`；失败就整体回到最近一次通过的状态，并把该文件转人工。
 """
 
-import json
 import os
 import re
 import shutil
@@ -50,6 +49,8 @@ class Options:
     record: bool = False
     no_prepare: bool = False
     jobs: int = 0
+    # guard 动作：自动补/改头文件宏守卫
+    fix: bool = False
 
 
 def _jobs(config, options):
@@ -333,8 +334,7 @@ def _classify(config, findings, checklist, stage=None):
             log.out(item.describe())
         if stage is not None:
             # owner 是"这条诊断算谁的问题"：与 ci 侧同一套 scope_of 口径。
-            # 不带它的话 SARIF 的 properties.owner 永远是空串，平台没法把
-            # 第三方头文件引发的告警和项目自身的问题分开
+            # 保留它，报告里才能把第三方头文件引发的告警和项目自身的问题分开
             stage.add_diagnostic(item.file, item.line, item.column,
                                  item.level.value, item.message, item.check,
                                  owner=paths.scope_of(item.file, project,
@@ -529,8 +529,9 @@ def record(config, options, tools, report=None):
     """把当前未登记的诊断登记成基线，返回错误码。
 
     用途是"接入即绿"：存量违规冻结成已知项，此后只有**新增**违规判红。它不
-    修改代码，也不代表命名被改对了——真正清存量靠 `--apply --apply-naming`。
+    修改代码，也不代表命名被改对了——真正清存量靠 `--apply`（默认包含命名）。
     """
+    # 只读动作：不替人还原
     stage = report.stage("style") if report is not None else None
     # 登记基线本就该全量：--record 不做改动集收窄（有意的差异，不是漏了）
     run = _prepare_run(config, options, apply_incremental=False)
@@ -601,10 +602,6 @@ def apply(config, options, tools, report=None):
                 "改坏没改坏。请先配好验证指令（例如跑一次 ci 的 build），"
                 "或改为手工修改")
         return Code.CONFIG_MISSING_ITEM
-
-    # 上一次没跑完就先还原：那些改动从未判卷，留在树里会被这一次当成"本来
-    # 就这样"，把一份没人验过的状态判绿
-    _recover_unfinished(config)
 
     workdir = Path(tempfile.mkdtemp(prefix="cxx_standardize_tidy_"))
     try:
@@ -711,43 +708,27 @@ def _is_frozen(path, frozen):
     return paths.is_frozen(path, frozen)
 
 
-def frozen_snapshot(frozen):
-    """禁改区源码文件的字节快照。
-
-    只查"命令行目标在不在界内"拦不住间接写入：目标在界内、fix-it 的落点却穿透
-    到界外的头文件。快照比对是第二道，而且必须留下内容——发现被写之后要能原样
-    还回去，"工作区字节级不变"才不是一句空话。
+def snapshot(paths):
+    """这些路径下源码文件的字节快照，用于判卷不过时整体回滚。
 
     比 mtime 更可靠：粗粒度文件系统上，同秒内的写入会让时间戳看不出变化。
     """
-    snapshot = {}
-    for item in frozen:
+    taken = {}
+    for item in paths:
         base = Path(item)
         candidates = [base] if base.is_file() else (
             sorted(base.rglob("*")) if base.is_dir() else [])
         for path in candidates:
             if path.is_file() and path.suffix in ALL_SUFFIXES:
-                snapshot[path] = path.read_bytes()
-    return snapshot
+                taken[path] = path.read_bytes()
+    return taken
 
 
-def frozen_touched(snapshot):
-    """快照里内容发生变化的文件，返回排序后的路径列表。"""
-    touched = []
-    for path, content in snapshot.items():
-        try:
-            if path.read_bytes() != content:
-                touched.append(path)
-        except OSError:
-            touched.append(path)
-    return sorted(touched)
-
-
-def restore_frozen(snapshot, touched):
-    """把被写过的禁改区文件按快照还原。"""
-    for path in touched:
-        if path in snapshot:
-            _code, message = source_mod.write_bytes(path, snapshot[path])
+def restore(taken, paths):
+    """把 paths 里的文件按快照还原。"""
+    for path in paths:
+        if path in taken:
+            _code, message = source_mod.write_bytes(path, taken[path])
             if _code != 0:
                 log.err(message)
 
@@ -798,8 +779,9 @@ def format_touched(tools, config, touched):
         log.err("风格已改，收尾排版未完成（样式无法确定）: " + message)
         return
     for path in touched:
+        protect = config.format_comments != "none"
         data, code, message = format_mod.formatted(
-            tools.clang_format, style, path, config.format_comments, config)
+            tools.clang_format, style, path, protect, config)
         if code != Code.OK:
             # 不回滚风格改动：改动本身已通过构建判卷。但必须说清"没做完"，
             # 别让人以为一切就绪
@@ -845,22 +827,18 @@ def _rename_pairs(replacements):
     return renames
 
 
-def _fix_snapshot(config, targets, protected):
-    """改前快照。返回 (禁改区快照, 回滚快照, 回滚覆盖的文件集合)。
+def _snapshot_files(config, targets, protected):
+    """改前快照：覆盖全部落点与会被同步字符串的测试文件，供判卷不过时整体回滚。
 
-    stamp 只看禁改区与黑名单，用来发现"计划之外的写入"；good 覆盖全部落点，用来
-    在末尾判卷不过时整体回滚。快照要连"会被同步字符串的测试文件"一起覆盖：改名会
-    连带改测试里的期望字符串，漏了它们，回滚就退不干净，下一轮从半改状态出发必然
-    继续失败。
+    快照要连"会被同步字符串的测试文件"一起覆盖：改名会连带改测试里的期望字符串，
+    漏了它们，回滚就退不干净，下一轮从半改状态出发必然继续失败。
     """
     protected_paths = [base for base, _ in protected]
-    stamp = frozen_snapshot(protected_paths)
     string_files = [path for path in watched_files(config)
                     if {part.lower() for part in Path(path).parts}
                     .intersection(tidy.TEST_DIRS)]
     watched = sorted(set(targets) | set(protected_paths) | set(string_files))
-    good = frozen_snapshot(watched)
-    return stamp, good, watched
+    return snapshot(watched), watched
 
 
 def _write_fixes(tools, config, replacements, renames, swap_prefixes=True):
@@ -878,101 +856,9 @@ def _write_fixes(tools, config, replacements, renames, swap_prefixes=True):
     return touched
 
 
-def _journal_dir(config):
-    """修复日志的落盘位置：与阶段日志同目录；没有可落盘的位置时返回 None。"""
-    base = getattr(config, "log_dir", None)
-    if not base:
-        build_dir = getattr(config, "build_dir", None)
-        base = (Path(build_dir) / "ci-logs") if build_dir else None
-    return (Path(base) / "apply-journal") if base else None
-
-
-def _journal_write(config, good):
-    """把改前快照落盘。
-
-    快照只放在内存里时，进程被 Ctrl-C 或 SIGTERM 打断就什么都不剩：源码停在
-    改了一半、还没判卷的状态，而下一次运行会把这份状态当成"本来就这样"照单
-    判绿。落盘之后，下一次运行能识别出"上次没跑完"，先还原再继续。
-    """
-    directory = _journal_dir(config)
-    if directory is None:
-        # 没有可落盘的位置：本次不做修复。宁可不动，也不留下无法恢复的半改状态
-        log.err("配置里既没有 CI_LOG_DIR 也没有 BUILD_DIR，无法落盘改前快照；"
-                "为免留下不可恢复的半改状态，本次不做修复")
-        return False
-    try:
-        if directory.exists():
-            shutil.rmtree(str(directory), ignore_errors=True)
-        directory.mkdir(parents=True)
-        paths_ = sorted(good)
-        for index, path in enumerate(paths_):
-            code, message = source_mod.write_bytes(
-                directory / "{}.bin".format(index), good[path])
-            if code != 0:
-                log.err(message)
-                return False
-        code, message = source_mod.write_file(
-            directory / "manifest.json",
-            json.dumps({"paths": [str(item) for item in paths_]}), config)
-        if code != 0:
-            log.err(message)
-            return False
-    except OSError as exc:
-        log.err("无法落盘改前快照（{}）；为免留下不可恢复的半改状态，本次不做修复"
-                .format(exc))
-        return False
-    return True
-
-
-def _journal_read(config):
-    """读回上次没跑完的快照；没有或不完整时返回空字典。"""
-    directory = _journal_dir(config)
-    if directory is None:
-        return {}
-    manifest = directory / "manifest.json"
-    if not manifest.is_file():
-        return {}
-    try:
-        listed = json.loads(manifest.read_text(encoding="utf-8"))["paths"]
-    except (OSError, ValueError, KeyError):
-        return {}
-    good = {}
-    for index, path in enumerate(listed):
-        payload = directory / "{}.bin".format(index)
-        if not payload.is_file():
-            return {}
-        good[Path(path)] = payload.read_bytes()
-    return good
-
-
-def _journal_clear(config):
-    """修复走完（判卷通过或已回滚）后清掉日志。"""
-    directory = _journal_dir(config)
-    if directory is not None:
-        shutil.rmtree(str(directory), ignore_errors=True)
-
-
-def _recover_unfinished(config):
-    """上一次没跑完就还原，返回是否还原过。
-
-    "没跑完"意味着那些改动从未被判卷：它们既可能编译不过，也可能改挂了测试。
-    还原到改前是唯一能确定的状态。
-    """
-    good = _journal_read(config)
-    if not good:
-        return False
-    restore_frozen(good, sorted(good))
-    _journal_clear(config)
-    log.err("上一次修复没有跑完（未判卷），已把 {} 个文件还原到改前；"
-            "请重跑一次".format(len(good)))
-    return True
-
-
-def _rollback(good, watched, stamp=None, changed=None):
-    """回滚：把落点还原到改前快照；禁改区被写过时再单独还回去。"""
-    restore_frozen(good, watched)
-    if stamp is not None and changed:
-        restore_frozen(stamp, changed)
+def _rollback(good, watched):
+    """回滚：把落点还原到改前快照。"""
+    restore(good, watched)
 
 
 def _apply_files(tools, config, config_file, files, workdir, database_dir,
@@ -1052,34 +938,22 @@ def _apply_files(tools, config, config_file, files, workdir, database_dir,
                             for path, name in blocked))
         return None, None, None, [path for path, _ in blocked], []
 
-    stamp, good, watched = _fix_snapshot(config, targets, protected)
-    if not _journal_write(config, good):
-        return None, None, None, [], []
+    good, watched = _snapshot_files(config, targets, protected)
     try:
         touched = _apply_and_verify(tools, config, replacements, renames,
-                                    good, watched, stamp, unfixable)
+                                    good, watched, unfixable)
     except BaseException:
         # 中断（Ctrl-C/SIGTERM）与任何异常都不能把未判卷的改写留在工作区：
         # 停下之前先还原，再让异常照常往上走
         _rollback(good, watched)
-        _journal_clear(config)
         raise
-    _journal_clear(config)
     return touched
 
 
 def _apply_and_verify(tools, config, replacements, renames, good, watched,
-                      stamp, unfixable):
+                      unfixable):
     """写入 → 判卷 → 必要时回滚重试。抽出来是为了让中断能统一兜住。"""
     touched = _write_fixes(tools, config, replacements, renames)
-
-    changed = frozen_touched(stamp)
-    if changed:
-        # 禁改区被写出：无论构建是否通过都要整体回滚
-        log.err("禁改区被写出（替换落点穿透）: "
-                + "、".join(str(item) for item in changed))
-        _rollback(good, watched, stamp=stamp, changed=changed)
-        return None, None, None, changed, []
     if _verify(config) is not False:
         return sorted(touched), [], [], [], unfixable
     # 判卷不过：先整体回滚，再退一步重试。断言消息里有的字符串由标识符派生、
@@ -1132,10 +1006,3 @@ def _swap_prefixes(config, touched):
             code, message = source_mod.write_source(path, updated, info)
             if code != 0:
                 log.err(message)
-
-
-def _restore(watched, good):
-    for item in watched:
-        _code, message = source_mod.write_bytes(item, good[item])
-        if _code != 0:
-            log.err(message)

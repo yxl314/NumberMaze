@@ -13,17 +13,13 @@ if sys.version_info < (3, 4):
     sys.exit("需要 Python 3.4 或更高版本，请用 python3 运行")
 import collections
 import hashlib
-import json
 import os
 import re
-import shlex
 import xml.etree.ElementTree as ET
 
 from . import errors
 from .errors import OK
-from .output import decode, err
-from .paths import COMPILE_DATABASE, is_within
-from .tools import capture, find_tool
+from .paths import is_within
 
 # ------------------------------------------------------------------ 判定
 
@@ -283,174 +279,6 @@ def attribute(error, project_roots, ignore_objects=(), ignore_prefixes=(),
     if outside == OUTSIDE_FAIL:
         return VERDICT_FAILURE, target, "域外对象且 outside=OUTSIDE_FAIL，计入失败: " + obj
     return VERDICT_IGNORED, target, "域外对象且 outside=OUTSIDE_IGNORE，归因忽略: " + obj
-
-
-# -------------------------------------------------------- 构建系统自省
-
-def _read_text(path):
-    """按 UTF-8 宽松解码读文本，非法字节替换而不是抛异常。"""
-    handle = open(path, "rb")
-    try:
-        return decode(handle.read())
-    finally:
-        handle.close()
-
-
-def _cmake_prefixes(build_dir):
-    """从 CMakeCache.txt 收集外部代码根。
-
-    只取 *_DIR / *_PREFIX / CMAKE_PREFIX_PATH：它们是依赖包的位置。刻意
-    跳过 CMAKE_CACHEFILE_DIR 这类指向本构建目录的键——归因时忽略集先于项目
-    根判定，把构建目录当外部会让项目自己编译出的测试程序被误判为域外。
-    """
-    path = os.path.join(build_dir, "CMakeCache.txt")
-    if not os.path.isfile(path):
-        return []
-    denied = ("CMAKE_CACHEFILE_DIR", "CMAKE_HOME_DIRECTORY",
-              "CMAKE_BINARY_DIR", "CMAKE_SOURCE_DIR")
-    result = []
-    for line in _read_text(path).splitlines():
-        line = line.strip()
-        if not line or line.startswith("//") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        name, _, kind = key.partition(":")
-        if kind not in ("PATH", "FILEPATH", "STRING"):
-            continue
-        upper = name.upper()
-        if upper in denied:
-            continue
-        if not (upper.endswith("_DIR") or upper.endswith("_PREFIX")
-                or upper == "CMAKE_PREFIX_PATH"):
-            continue
-        # 缓存里的路径可以是分号分隔的列表，带 ${} 的是未展开变量
-        for item in value.split(";"):
-            item = item.strip()
-            if item and "$" not in item and os.path.isabs(item):
-                result.append(os.path.normpath(item))
-    return result
-
-
-def _looks_like_qmake(build_dir):
-    """只在构建目录确实出自 qmake 时才去问 qmake。
-
-    本机装了 Qt 但项目用 cmake 时，无条件执行 qmake -query 会把 Qt 的库
-    目录算成项目的外部根，凭空多出一批忽略前缀。
-    """
-    if os.path.isfile(os.path.join(build_dir, ".qmake.stash")):
-        return True
-    makefile = os.path.join(build_dir, "Makefile")
-    if not os.path.isfile(makefile):
-        return False
-    handle = open(makefile, "rb")
-    try:
-        return b"qmake" in handle.read(4096)
-    finally:
-        handle.close()
-
-
-def _qmake_prefixes(build_dir):
-    """从 qmake 取 QT_INSTALL_LIBS，工具缺失或查询失败都算没探测到。"""
-    if not _looks_like_qmake(build_dir):
-        return []
-    binary, code, _ = find_tool(("qmake", "qmake6"))
-    if code != OK or not binary:
-        return []
-    code, output, _ = capture([binary, "-query", "QT_INSTALL_LIBS"])
-    if code != 0:
-        return []
-    value = decode(output).strip()
-    if value and os.path.isabs(value):
-        return [os.path.normpath(value)]
-    return []
-
-
-def _library_dirs(tokens):
-    """从一条编译命令里取出 -L 指定的库目录。"""
-    result = []
-    index = 0
-    while index < len(tokens):
-        token = tokens[index]
-        if token == "-L" and index + 1 < len(tokens):
-            result.append(tokens[index + 1])
-            index += 2
-            continue
-        if token.startswith("-L") and len(token) > 2:
-            result.append(token[2:])
-        index += 1
-    return result
-
-
-def _compile_db_prefixes(build_dir):
-    """从编译数据库里收集 -L 库目录。
-
-    不取 "directory" 字段：那是本项目的构建目录，不是外部代码根，
-    当成忽略前缀会放过项目自身的泄漏。
-    """
-    path = os.path.join(build_dir, COMPILE_DATABASE)
-    if not os.path.isfile(path):
-        return []
-    try:
-        entries = json.loads(_read_text(path))
-    except ValueError as exc:
-        err("编译数据库无法解析，其库目录未纳入忽略前缀: {}: {}".format(
-            path, exc))
-        return []
-    if not isinstance(entries, list):
-        return []
-    result = []
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        tokens = None
-        arguments = entry.get("arguments")
-        if isinstance(arguments, list):
-            tokens = [str(item) for item in arguments]
-        elif isinstance(entry.get("command"), str):
-            try:
-                tokens = shlex.split(entry["command"])
-            except ValueError as exc:
-                # 这条命令的库目录拿不到，对应框架可能被当成项目自身的问题
-                err("编译数据库里的命令无法切分，其库目录未纳入忽略前缀: "
-                    "{}: {}".format(entry.get("file") or "?", exc))
-                tokens = None
-        if tokens:
-            result.extend(_library_dirs(tokens))
-    return [os.path.normpath(item) for item in result
-            if item and os.path.isabs(item)]
-
-
-def auto_ignore_prefixes(build_dir):
-    """构建系统自省得到的外部代码根。
-
-    cmake 缓存里的前缀、qmake 的 QT_INSTALL_LIBS、编译数据库里的库目录，
-    外加 /usr/lib*、/lib* 固定系统前缀集。
-
-    探测失败时把原因打到 stderr 再跳过：少一项前缀会让本该域外的帧被算成项目
-    自身的问题，使用者看到的会是"多了几条泄漏"，不说明的话无从判断真假。
-
-    三项都探测不到时返回空列表（连系统前缀也不给）：此时没有可信的构建
-    上下文，调用方应自行并入 SYSTEM_PREFIXES 兜底，而不是把"探测不到"当成
-    "没有任何外部代码"。
-    """
-    if not build_dir:
-        return []
-    found = []
-    for probe in (_cmake_prefixes, _qmake_prefixes, _compile_db_prefixes):
-        try:
-            found.extend(probe(build_dir))
-        except Exception as exc:
-            err("忽略前缀探测失败（{}），该项跳过: {}".format(
-                probe.__name__, exc))
-            continue
-    if not found:
-        return []
-    result = []
-    for item in found + list(SYSTEM_PREFIXES):
-        item = os.path.normpath(item) if item else ""
-        if item and item not in result:
-            result.append(item)
-    return result
 
 
 # -------------------------------------------------------------- 汇总

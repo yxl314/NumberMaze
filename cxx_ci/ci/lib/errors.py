@@ -75,16 +75,6 @@ BUILD_FILE_MISSING = compose(KIND_USAGE, 8)    # 构建文件不存在
 UNSAFE_DELETE = compose(KIND_USAGE, 10)        # 拒绝删除项目外的路径
 XFAIL_BAD_FILE = compose(KIND_USAGE, 13)       # xfail 清单语法错误
 XFAIL_STALE = compose(KIND_USAGE, 14)          # xfail 登记项已修复或复核到期
-AUDIT_DEAD_KEY = compose(KIND_USAGE, 15)       # 配置项没有任何引用
-AUDIT_BYPASS_LITERAL = compose(KIND_USAGE, 16)  # 绕过配置直接写死的字面量
-AUDIT_STD_DRIFT = compose(KIND_USAGE, 17)      # 编译标准锁定被改
-BOUNDARY_DETAIL_LEAK = compose(KIND_USAGE, 18)  # detail:: 越出模块边界
-BOUNDARY_GUARD_MISSING = compose(KIND_USAGE, 19)  # 头文件缺少宏守卫
-BOUNDARY_GUARD_MISNAMED = compose(KIND_USAGE, 20)  # 宏守卫名与路径不符
-BOUNDARY_GUARD_BROKEN = compose(KIND_USAGE, 21)  # 有 #ifndef 却没有配对 #define
-AUDIT_RAW_IO = compose(KIND_USAGE, 22)         # 绕过 source.py 的裸写文本调用
-AUDIT_PREFIX_DRIFT = compose(KIND_USAGE, 24)   # 自行拼前缀的路径包含判断
-AUDIT_UNKNOWN_KEY = compose(KIND_USAGE, 25)    # 配置里写了不认识的键
 
 # ---------------------------------------------------------------- 环境依赖
 

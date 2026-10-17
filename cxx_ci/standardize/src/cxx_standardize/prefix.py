@@ -23,6 +23,56 @@ clang-tidy 的 identifier-naming 只有一种修复动作——把配置里的 P
 大小写不自己转：clang-tidy 的文本里已经转好了，剥前缀不影响它。自己写一份
 CamelCase/snake_case 转换器只会引入新的出错面（缩写、数字、连续大写都是坑）。
 """
+
+from pathlib import Path
+
+import yaml
+
+
+def local_ban_regexp(banned):
+    """按禁用前缀集生成局部变量的豁免正则。
+
+    POSIX ERE 没有先行否定，因此按分支拆解：
+
+      - `[^gmstv]…`      常规名，首字符不在禁用集里；
+      - `[gmstv][^_]…`   以禁用字母开头但第二个字符不是下划线（mutex/value/token）；
+      - `^[gmstv]$`      单字母名。
+
+    这样"带禁用前缀"的名字（`v_foo`）落到检查里，其余一律豁免。
+    """
+    import re
+
+    letters = re.escape(str(banned or ""))
+    if not letters:
+        return ""
+    return ("^([^{letters}]|[{letters}][^_])[a-z0-9_]*$|^[{letters}]$"
+            .format(letters=letters))
+
+
+def naming_options(config_file):
+    """读出 `.clang-tidy` 里全部 readability-identifier-naming 选项。"""
+    path = Path(str(config_file or ""))
+    if not path.is_file():
+        return None
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8",
+                                                  errors="replace"))
+    except yaml.YAMLError:
+        return None
+    if not isinstance(document, dict):
+        return None
+    from .tidy import NAMING_CHECK
+
+    options = {}
+    for item in document.get("CheckOptions") or []:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "")
+        if key.startswith(NAMING_CHECK + "."):
+            options[key[len(NAMING_CHECK) + 1:]] = str(item.get("value"))
+    return options
+
+
 def known_prefixes(config):
     """口径表里出现过的全部前缀（已知前缀集合）。"""
     values = set()
@@ -111,9 +161,7 @@ def _prefix_of(options, kind):
 
 def declared_prefixes(config):
     """从 .clang-tidy 读出每个 kind 声明的前缀。"""
-    from . import naming_meta
-
-    options = naming_meta.naming_options(config.clang_tidy_config)
+    options = naming_options(config.clang_tidy_config)
     if options is None:
         return {}
     kinds = set(config.naming_prefix or {})

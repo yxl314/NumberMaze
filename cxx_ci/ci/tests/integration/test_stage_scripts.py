@@ -412,56 +412,6 @@ exit 0
         assert "聚合" not in out
 
 
-class TestBoundaryEncodingAtStageLevel(SandboxCase):
-    """编码判定不出的文件走**完整阶段**时退出码必须非 0。
-
-    单元测试只断言了 fix_guards 返回空清单与文件没被改动——那是"跳过"的证据，
-    不是"退出码非 0"的证据。而"跳过不等于通过"这条纪律要求的正是后者：脚本
-    看到 0 会当成功，用户的中文却从头到尾没被检查过。
-    """
-
-    def _with_boundary_scope(self):
-        """把 BOUNDARY_DIRS 指向 src：boundary 只看这些目录。"""
-        self.box.configure(CONFIG_TEMPLATE.replace(
-            "SCOPE = {", 'BOUNDARY_DIRS = [ROOT / "src"]\nSCOPE = {')
-            if "SCOPE = {" in CONFIG_TEMPLATE else
-            CONFIG_TEMPLATE + '\nBOUNDARY_DIRS = [ROOT / "src"]\n')
-
-    def test_gbk_file_makes_the_stage_exit_nonzero(self):
-        gbk = (u"#ifndef A_H\n#define A_H\n// \u4e2d\u6587\u6ce8\u91ca\n"
-               u"int value;\n#endif\n").encode("gb18030")
-        target = self.box.path / "src" / "a.h"
-        # ci 侧连测试也守 3.4：mkdir(exist_ok=) 是 3.2 有的，但 Path.mkdir 的
-        # 关键字写法在 3.4 上仍受限，用 os.makedirs 更稳
-        if not target.parent.is_dir():
-            os.makedirs(str(target.parent))
-        with open(str(target), "wb") as handle:
-            handle.write(gbk)
-        self._with_boundary_scope()
-        code, out, err = self.box.run("stages/boundary.py", ["--fix"])
-        assert 0 != code, (out, err)
-        assert "编码无法确定" in (out + err)
-        # 文件必须一个字节都没动
-        with open(str(target), "rb") as handle:
-            assert gbk == handle.read()
-
-    def test_crlf_survives_the_real_rewrite_path(self):
-        """CRLF 文件走真实改写路径后仍是 CRLF（单元测试只验了读写往返）。"""
-        text = (u"#ifndef A_H\n#define A_H\nint value;\n#endif\n"
-                ).replace("\n", "\r\n")
-        target = self.box.path / "src" / "a.h"
-        if not target.parent.is_dir():
-            os.makedirs(str(target.parent))
-        with open(str(target), "wb") as handle:
-            handle.write(text.encode("utf-8"))
-        self._with_boundary_scope()
-        code, out, err = self.box.run("stages/boundary.py", ["--fix"])
-        assert 0 == code, (out, err)
-        with open(str(target), "rb") as handle:
-            data = handle.read()
-        bare = data.count(b"\n") - data.count(b"\r\n")
-        assert 0 == bare, "改写后出现裸 LF，换行风格被改了"
-
 
 class TestCleanToleratesAwkwardEntries(SandboxCase):
     """清理构建树时遇到"删不掉/不是普通目录"的条目不该让整轮停下。

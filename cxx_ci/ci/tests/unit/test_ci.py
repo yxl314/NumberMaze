@@ -47,7 +47,7 @@ class TestSelectSteps:
     def test_skip(self):
         stages, unknown = ci.select_stages(
             [], ["memcheck", "run_test", "build_test", "style", "format"])
-        assert ['boundary', 'clean', 'build'] == stages
+        assert ['clean', 'build'] == stages
 
     def test_style_and_format_are_not_ci_stages(self):
         """风格与排版属于另一个项目：本项目连它们的名字都不该出现。
@@ -63,7 +63,7 @@ class TestSelectSteps:
         assert '"format"' not in source
 
     def test_base_flow_is_complete(self):
-        assert ('boundary', 'clean', 'build', 'build_test', 'run_test',
+        assert ('clean', 'build', 'build_test', 'run_test',
                 'memcheck') == ci.STAGES
 
     def test_default_stages_honours_config(self):

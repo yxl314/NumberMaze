@@ -42,8 +42,7 @@ files = ["src/cxx_standardize"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-# 两侧有同名测试文件（同固件对照测试刻意对称：test_paths / test_report /
-# test_xfail_parity / test_audit_parity）。默认导入模式按 basename 建模块，
-# 一个 pytest 进程里同时收两侧就会 import file mismatch；用 importlib 模式
-# 按完整路径建模块，两侧可以放在同一条命令里跑
+# 两侧有同名测试文件（test_paths / test_report / test_xfail / test_audit）。
+# 默认导入模式按 basename 建模块，一个 pytest 进程里同时收两侧就会 import
+# file mismatch；用 importlib 模式按完整路径建模块，两侧可以放在同一条命令里跑
 addopts = "--import-mode=importlib"

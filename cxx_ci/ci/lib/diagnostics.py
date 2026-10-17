@@ -11,6 +11,8 @@ import collections
 import os
 import re
 
+from . import platform as platform_module
+
 from .paths import is_within, is_within_logical
 
 # 诊断级别，数值越大越严重
@@ -24,7 +26,7 @@ Diagnostic = collections.namedtuple(
 
 # 编译器告警：路径:行:列: 级别: 消息（列可省略）
 _COMPILER = re.compile(
-    r"^(?P<file>[^:]+):(?P<line>\d+):(?:(?P<column>\d+):)?\s*"
+    r"^(?P<file>.+?):(?P<line>\d+):(?:(?P<column>\d+):)?\s*"
     r"(?P<level>fatal error|error|warning|note):\s*(?P<message>.*)$")
 
 # valgrind 汇总：==PID== ERROR SUMMARY: N errors from M contexts
@@ -148,25 +150,61 @@ def dedup_diagnostics(items):
     return result
 
 
+# 一条忽略正则最多允许跑多久（秒）。配置里的正则由使用者手写，写成像
+# (a+)+$ 这种回溯爆炸式时，Python 的 re 会一直算下去——挂在**驱动层**，
+# 阶段超时管不到它，整轮门禁就那么停在那里。超过上限就报错退出，把"卡住"
+# 变成"看得见的失败"
+IGNORE_PATTERN_SECONDS = 2.0
+
+
+# 探测串：重复的几种常见字符 + 一个不匹配的结尾，足以引爆 (a+)+$ 这类回溯
+# 长度取 48 个 a：实测 (a+)+$ 在 24 个 a 上约 0.9s（低于上限、拦不住），
+# 在 48 个上远超上限。合法正则在这个规模上是微秒级，不会误报
+PROBE_TEXT = ("a" * 48 + "0" * 8 + " " * 8 + os.sep * 8 + "." * 8 + "!")
+
+
+class SlowPattern(platform_module.PatternTimeout):
+    """一条忽略正则跑超时了。"""
+
+
 def filter_diagnostics(items, level="error", sources="project", ignores=()):
     """按阈值、归属与忽略正则筛选诊断。
 
     level 为级别名，低于该级别的丢弃；sources 为 project 时只留项目自身的；
     ignores 里的正则命中则静默丢弃。
+
+    忽略正则跑超时（回溯爆炸）时抛 SlowPattern，由调用方转成一条明确的配置
+    错误——总比整轮门禁停在那里好。
     """
     threshold = LEVEL_NAMES.get(level, LEVEL_NAMES["error"])
     if threshold < 0:
         return []
-    patterns = [re.compile(item) for item in ignores]
+    patterns = []
+    for item in ignores:
+        pattern = re.compile(item)
+        # 先拿一小段"混合重复字符且必然不匹配"的字符串做限时探测：回溯爆炸的
+        # 正则（(a+)+$ 之类）在这里就会暴露，不必等到真有诊断进来。长度取 64：
+        # 正常正则哪怕慢，也不会在这个规模上跑到秒级
+        platform_module.run_with_deadline(
+            lambda p=pattern: p.search(PROBE_TEXT),
+            IGNORE_PATTERN_SECONDS, error=SlowPattern)
+        patterns.append(pattern)
     result = []
     for item in items:
         if LEVELS.get(item.level, 0) < threshold:
             continue
         if sources == "project" and item.source != "project":
             continue
-        # 原始行与消息都参与匹配，用户写哪一种都能命中
-        if any(pattern.search(item.raw) or pattern.search(item.message)
-               for pattern in patterns):
+        matched = False
+        for pattern in patterns:
+            # 原始行与消息都参与匹配，用户写哪一种都能命中
+            hit = platform_module.run_with_deadline(
+                lambda p=pattern, i=item: p.search(i.raw) or p.search(i.message),
+                IGNORE_PATTERN_SECONDS, error=SlowPattern)
+            if hit:
+                matched = True
+                break
+        if matched:
             continue
         result.append(item)
     return result

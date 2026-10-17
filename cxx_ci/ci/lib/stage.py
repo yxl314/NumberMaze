@@ -27,7 +27,8 @@ import time
 
 from .diagnostics import (Diagnostic, collect_diagnostics, dedup_diagnostics,
                           filter_diagnostics, resolve_source)
-from .errors import KIND_SKIPPED, OK, STAGE_TIMEOUT, compose, kind
+from .errors import (CONFIG_BAD_VALUE, KIND_SKIPPED, OK, STAGE_TIMEOUT,
+                     compose, kind)
 from .output import decode, err, out
 from . import platform
 from .paths import scope_of, scope_roots
@@ -207,6 +208,12 @@ def run_stage(config, name, script, extra=(), verbose=False, timeout=0):
     长构建才能看到实时进度。透传模式下不保证完整落盘。
     """
     cmd = [sys.executable, str(script)] + [str(item) for item in extra]
+    if timeout is not None and timeout < 0:
+        # 负值以前被 `or None` 放行：communicate(timeout=-1) 立刻超时，每个阶段
+        # 秒杀并判成 [TIMEOUT]，报出来的是"阶段超时"而不是"参数写错了"
+        return Result(name, CONFIG_BAD_VALUE, 0.0, "",
+                      "--timeout 必须是正数或 0（0 表示不限时），实际是 {}"
+                      .format(timeout), False)
     limit = timeout or None
     env = c_locale_env({VERBOSE_ENV: "1"} if verbose else None)
     truncate_log(config, name)
@@ -311,7 +318,9 @@ def stage_view(config, result):
     因此"报告说绿、终端说红"在结构上不可能发生——判定仍只由阶段负责，本函数
     不新增任何判定分支。
     """
-    diags, fails, knowns, sums = parse(result.out + "\n" + result.err)
+    # 只解析 stdout：那是协议通道。stderr 是原始工具输出与人话，里面任何一行
+    # 都可能长得像协议行（编译器会把文件名原样回显），一律不采信
+    diags, fails, knowns, sums = parse(result.out)
     heuristic = False
     if not diags and not fails and not sums:
         raw = collect_diagnostics(result.out + "\n" + result.err, config.root,
@@ -321,6 +330,8 @@ def stage_view(config, result):
                  for item in raw]
         heuristic = bool(diags)
     items = [owned(item, config) for item in diags]
+    # 忽略正则回溯爆炸时会抛 SlowPattern：让它传到入口，由那里报成一条明确的
+    # 配置错误并终止——挂在这里等下去，使用者只会看到"门禁不动了"
     kept = filter_diagnostics(
         items, config.diagnostic_level, config.diagnostic_sources,
         config.diagnostic_ignore)
@@ -378,7 +389,7 @@ def render_failure(config, result, log_path):
 
     逐例失败与摘要先行，完整日志留在文件里按需查看。
     """
-    _, fails, _knowns, sums = parse(result.out + "\n" + result.err)
+    _, fails, _knowns, sums = parse(result.out)
     for text in sums:
         out("    " + text)
     for item in fails:

@@ -84,38 +84,6 @@ class TestBuild:
 
 
 class TestWriters:
-    def test_status_is_not_collapsed_by_missing_failures(self, config):
-        """失败阶段没有逐条失败，仍要在 JUnit 里画成一个失败而不是通过。"""
-        document = make_document(config, status_code=Code.STYLE_PENDING,
-                                 summary="3 个文件存在风格问题")
-        xml = report.to_junit(document)
-        assert 'failures="1"' in xml
-        assert "<failure message=" in xml
-        assert "<skipped" not in xml
-
-    def test_xfail_failure_is_skipped_not_failed(self, config):
-        document = make_document(
-            config, status_code=Code.STYLE_PENDING,
-            failures=[{"case": "src/a.cpp", "reason": "需人工处理", "xfail": True}])
-        xml = report.to_junit(document)
-        assert "<skipped" in xml
-        assert 'failures="0"' in xml
-        assert 'skipped="1"' in xml
-
-    def test_sarif_marks_known_issues(self, config):
-        document = make_document(
-            config, status_code=Code.STYLE_PENDING,
-            diagnostics=[{"file": "src/a.cpp", "line": 3, "column": 1,
-                          "level": "warning", "message": "改名 [x]",
-                          "check": "readability-identifier-naming",
-                          "xfail": True}])
-        doc = json.loads(report.to_sarif(document))
-        result = doc["runs"][0]["results"][0]
-        assert "readability-identifier-naming" == result["ruleId"]
-        assert "unchanged" == result["baselineState"]
-        assert result["properties"]["knownIssue"] is True
-        assert 3 == result["locations"][0]["physicalLocation"]["region"]["startLine"]
-
     def test_json_is_sorted_and_stable(self, config):
         document = make_document(config)
         text = report.to_json(document)
@@ -130,15 +98,6 @@ class TestWrite:
         assert ["<stdout>"] == written
         assert [] == problems
         assert '"report_version"' in capsys.readouterr().out
-
-    def test_multiple_formats_get_suffixes(self, config, tmp_path):
-        target = str(tmp_path / "out")
-        written, problems = report.write(document=make_document(config),
-                                         target=target,
-                                         formats=("json", "sarif"))
-        assert [] == problems
-        assert sorted(written) == sorted([target + ".json", target + ".sarif"])
-        assert Path(target + ".sarif").is_file()
 
     def test_unwritable_target_is_a_problem_only(self, config, tmp_path):
         blocker = tmp_path / "blocker"
@@ -165,7 +124,10 @@ class TestCliReport:
             env=project.env(self._tools(project)))
         assert 0 == code, err
         document = json.loads(target.read_text(encoding="utf-8"))
-        assert TOP_KEYS == set(document)
+        # conclusion 是入口的判定搬过来的：报告不判卷，但必须让平台看见
+        # "一段都没跑就失败"，否则报告读作零失败
+        assert TOP_KEYS | {"conclusion"} == set(document)
+        assert "passed" == document["conclusion"]["status"]
         assert ["format", "style"] == sorted(
             stage["name"] for stage in document["stages"])
         assert all("passed" == stage["status"] for stage in document["stages"])

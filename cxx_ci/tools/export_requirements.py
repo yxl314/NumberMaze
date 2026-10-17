@@ -35,25 +35,11 @@ CI_HEADER = """\
 # {generated}"""
 
 STANDARDIZE_HEADER = """\
-# standardize 侧运行依赖（Python >= 3.11）。
+# standardize 侧依赖清单（Python >= 3.11）。
 #
 #     pip install -r requirements/standardize.txt
 #
-# {generated}"""
-
-CLANG17_HEADER = """\
-# 可选的 pip clang 工具：clang-format / clang-tidy 自带二进制，版本由包钉定。
-#
-# 只在机器上没有系统 clang 17 时安装。安装后解析先看这两个包自带的二进制、
-# 再退回 PATH；要改用系统那一份，在配置里写 CLANG_FORMAT_BIN / CLANG_TIDY_BIN
-# 显式指定（见 standardize/config/config.py.example）。
-#
-# {generated}"""
-
-DEV_HEADER = """\
-# standardize 侧的开发依赖（测试与静态检查），不影响使用者。
-#
-#     pip install -r requirements/dev.txt
+# 含运行依赖、可选 pip clang 工具与开发依赖（测试与静态检查），分节列出。
 #
 # {generated}"""
 
@@ -72,17 +58,37 @@ def _render(header, packages):
     return "\n".join(body) + "\n"
 
 
+def _render_sections(header, sections):
+    """头注释 + 逐节（注释行 + 包行），节间空行，末尾补一个换行。"""
+    body = header.format(generated=GENERATED_BY).rstrip("\n").splitlines()
+    for comments, packages in sections:
+        body.append("")
+        body.extend(comments)
+        body.extend(packages)
+    return "\n".join(body) + "\n"
+
+
 def expected_files():
-    """本应写盘的四份清单：相对名 → 内容。"""
+    """本应写盘的两份清单：相对名 → 内容。
+
+    只有两个模块各自的清单：`ci/` 零第三方依赖，恒为空（只有头注释）；
+    `standardize/` 的运行、可选 pip clang 与开发依赖都归 standardize.txt。
+    """
     project = _read_pyproject()["project"]
     optional = project.get("optional-dependencies", {})
+    sections = (
+        (["# --- 运行依赖 ---"],
+         project.get("dependencies", [])),
+        (["# --- 可选：机器上没有系统 clang 17 时安装 ---",
+          "# clang-format / clang-tidy 自带二进制，版本由包钉定；要改用系统那一份，",
+          "# 在配置里写 CLANG_FORMAT_BIN / CLANG_TIDY_BIN 显式指定。"],
+         optional.get("clang17", [])),
+        (["# --- 开发依赖：测试与静态检查，不影响使用者 ---"],
+         optional.get("dev", [])),
+    )
     return {
         "ci.txt": _render(CI_HEADER, []),
-        "standardize.txt": _render(STANDARDIZE_HEADER,
-                                   project.get("dependencies", [])),
-        "standardize-clang17.txt": _render(CLANG17_HEADER,
-                                           optional.get("clang17", [])),
-        "dev.txt": _render(DEV_HEADER, optional.get("dev", [])),
+        "standardize.txt": _render_sections(STANDARDIZE_HEADER, sections),
     }
 
 
@@ -94,6 +100,10 @@ def check(files):
         current = path.read_text(encoding="utf-8") if path.is_file() else None
         if current != text:
             problems.append(name)
+    if OUT_DIR.is_dir():
+        for path in sorted(OUT_DIR.glob("*.txt")):
+            if path.name not in files:
+                problems.append(path.name + "（多余）")
     return problems
 
 
@@ -118,6 +128,10 @@ def main(argv=None):
         return 0
 
     OUT_DIR.mkdir(exist_ok=True)
+    for path in sorted(OUT_DIR.glob("*.txt")):
+        if path.name not in files:
+            path.unlink()
+            print("删除 " + str(path))
     for name, text in sorted(files.items()):
         (OUT_DIR / name).write_text(text, encoding="utf-8")
         print("写入 " + str(OUT_DIR / name))

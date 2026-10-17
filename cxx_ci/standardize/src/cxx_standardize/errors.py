@@ -26,12 +26,10 @@ class Code(IntEnum):
     # 有待改动
     STYLE_PENDING = 1
     FORMAT_PENDING = 2
-    BASELINE_REJECTED = 3   # 注释优先的基线还不成立，需一次性切换
 
     # 检查未通过（改动无法自动完成）
     STYLE_FAILED = 10
     FORMAT_FAILED = 11
-    FORMAT_UNSTABLE = 12    # 排版结果不幂等，拒绝应用
     FROZEN_TOUCHED = 13     # 修复落点落在禁改区，整体拒绝
 
     # 工具或配置错误
@@ -72,16 +70,17 @@ class Code(IntEnum):
     ENCODING_UNKNOWN = 45
     # 按原编码写不回（出现了原编码表示不了的字符），同样只报不改
     ENCODING_UNWRITABLE = 46
-    # 源码里出现绕过 source.py 的裸写文本调用
-    AUDIT_RAW_IO = 47
-    # 源码里又自行拼前缀做路径包含判断，应改用 paths.is_within
-    AUDIT_PREFIX_DRIFT = 48
     # 配置里写了本工具不认识的键（多半是错字，或被重命名的旧项）
     AUDIT_UNKNOWN_KEY = 49
     # 同一个工程上已经有另一份工具在跑（互斥锁没拿到）
     ENV_BUSY = 50
     # 配置声明的契约版本与本工具实现的不一致：两侧取自不同代，拒绝执行
-    CONTRACT_MISMATCH = 49
+    CONTRACT_MISMATCH = 48
+    # 代码守卫：头文件宏守卫与 detail:: 归属
+    GUARD_MISSING = 51       # 头文件缺少宏守卫
+    GUARD_MISNAMED = 52      # 宏守卫名与路径不符
+    GUARD_BROKEN = 53        # 有 #ifndef 却没有配对 #define
+    DETAIL_LEAK = 54         # detail:: 越出模块目录
 
 
 def exit_code(code):
@@ -89,10 +88,12 @@ def exit_code(code):
     if code == Code.OK:
         return Exit.OK
     if code in (Code.STYLE_PENDING, Code.FORMAT_PENDING,
-                Code.BASELINE_REJECTED, Code.STYLE_FAILED,
-                Code.FORMAT_FAILED, Code.FORMAT_UNSTABLE, Code.XFAIL_STALE,
+                Code.STYLE_FAILED,
+                Code.FORMAT_FAILED, Code.XFAIL_STALE,
                 Code.FROZEN_TOUCHED, Code.ENCODING_UNKNOWN,
-                Code.ENCODING_UNWRITABLE):
+                Code.ENCODING_UNWRITABLE,
+                Code.GUARD_MISSING, Code.GUARD_MISNAMED, Code.GUARD_BROKEN,
+                Code.DETAIL_LEAK):
         return Exit.PENDING
     if code == Code.INTERRUPTED:
         return Exit.ERROR

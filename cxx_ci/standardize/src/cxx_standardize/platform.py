@@ -10,7 +10,7 @@ ASan 运行库还靠 `<编译器> -print-file-name=libasan.so` 定位）、子�
 
 与 `ci/lib/platform.py` 为**平行实现**（本侧不含 `memory_check_available` / `capability`：
 standardize 不做内存检查，那两个函数只存在于真正用它们的一侧）：两个项目互不 import，只靠文件与命令行
-契约协作。改动须同步两侧并跑 `tests/test_platform_parity.py` 的对照测试。
+契约协作。改动须同步两侧。
 
 与其假装可移植然后到处降级，不如把定位钉死：
 
@@ -137,13 +137,18 @@ LOCK_NAME = ".cxx-ci.lock"
 LOCK_ENV = "CXX_CI_LOCK_HELD"
 
 
-def lock_path(log_dir):
-    """互斥锁文件的位置：日志目录下；没有日志目录时返回空串。"""
-    return os.path.join(str(log_dir), LOCK_NAME) if log_dir else ""
+def lock_path(target):
+    """互斥锁文件的位置：被保护的构建树里。
+
+    锁要保护的其实是构建树（两份工具同时改同一棵树才会互相破坏），所以键取
+    构建树而不是日志目录：只改 CI_LOG_DIR 就会拿到两把不同的锁，而它们改的是
+    同一棵树。锁文件放在构建树里，clean 会显式保留它（见 clean.kept_names）。
+    """
+    return os.path.join(str(target), LOCK_NAME) if target else ""
 
 
-def acquire_lock(log_dir):
-    """占用这个工程的互斥锁，返回 (句柄或 None, 错误说明)。
+def acquire_lock(target):
+    """占用这棵构建树的互斥锁，返回 (句柄或 None, 错误说明)。
 
     两份工具在同一个工程上同时跑会互相破坏：一份的 clean 会清掉另一份正在用的
     构建树（随后 configure 失败，好工程判红），阶段日志被两份交替追加成"失败+
@@ -153,12 +158,13 @@ def acquire_lock(log_dir):
     flock 由内核在进程退出时自动释放，因此进程被 SIGKILL 也不会留下死锁；锁文件
     本身留在盘上无害。取不到锁时就直说"有另一份在跑"，不猜、不等待、不硬闯。
     """
-    path = lock_path(log_dir)
+    path = lock_path(target)
     if not path:
         return None, ""
-    if os.environ.get(LOCK_ENV):
-        # 同一棵进程树里已经有人持锁：它保证了这个工程上只有我们这一串在跑。
-        # 这里不再取锁，也不负责释放
+    if os.environ.get(LOCK_ENV) == path:
+        # 同一棵进程树里已经有人持着**同一把**锁：它保证了这棵树上只有我们这一串
+        # 在跑。这里不再取锁，也不负责释放。比对路径而不是"变量存在即跳过"：
+        # 后者会让任何自带这个变量的环境（哪怕是别的工程设的）都绕开互斥
         return None, ""
     try:
         if not os.path.isdir(os.path.dirname(path)):
@@ -178,9 +184,10 @@ def acquire_lock(log_dir):
     except (IOError, OSError):
         # 写不进 pid 只影响排查时的线索，互斥本身已经拿到了
         pass
-    # 让子进程知道锁已经有人持着（BUILD_COMMAND / VERIFY_COMMAND 都会再起
-    # ci.py，它们不该、也不能再取一次）
-    os.environ[LOCK_ENV] = str(os.getpid())
+    # 让子进程知道**这一把**锁已经有人持着（BUILD_COMMAND / VERIFY_COMMAND 都会
+    # 再起 ci.py，它们不该、也不能再取一次）。记的是锁文件路径而不是 pid：
+    # 子进程要能判断"你持的是不是我要的这一把"，否则任何来源的同名变量都能绕过互斥
+    os.environ[LOCK_ENV] = path
     return handle, ""
 
 

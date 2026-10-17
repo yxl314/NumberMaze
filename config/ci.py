@@ -72,7 +72,6 @@ FROZEN = [
 # ---- 内部面边界（boundary）
 
 # 受管源目录：检查 detail:: 归属与头文件宏守卫。
-BOUNDARY_DIRS = [ROOT / "Source" / "NumberNaze"]
 
 
 # ---- 内存检查

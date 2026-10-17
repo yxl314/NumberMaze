@@ -12,7 +12,7 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from lib import audit, errors, paths
+from lib import errors, paths
 from lib import config as config_module
 from lib.config import (BUILD_TOOLS, TOOL_ROOT,
                         load_config)
@@ -504,12 +504,24 @@ class TestContractVersion:
         assert "契约版本" in message
 
     def test_check_contract_passes_when_matching_or_absent(self):
-        """声明一致、没写、或写的不是整数（视为没写）都静默通过。"""
-        for text in ("CONTRACT_VERSION = 3\n", "ROOT = 1\n",
-                     "CONTRACT_VERSION = 'v1'\n"):
+        """声明一致、或压根没写，才静默通过。"""
+        for text in ("CONTRACT_VERSION = 3\n", "ROOT = 1\n"):
             module, code, _ = config_module.load_module(self.write(text))
             assert errors.OK == code, text
             assert errors.OK == config_module.check_contract(module)[0], text
+
+    def test_a_declaration_of_the_wrong_type_is_reported(self):
+        """写成 '2' 或 2.0 不能被当成"没写"。
+
+        契约写的是"一旦写了就必须与本工具实现一致"。当成没写静默放行时，
+        配置和工具取自不同代却一路跑到底，报出来的还是别的问题。
+        """
+        for text in ("CONTRACT_VERSION = 'v1'\n", "CONTRACT_VERSION = 2.0\n",
+                     "CONTRACT_VERSION = '2'\n", "CONTRACT_VERSION = True\n"):
+            module, code, _ = config_module.load_module(self.write(text))
+            assert errors.OK == code, text
+            assert errors.CONTRACT_MISMATCH == \
+                config_module.check_contract(module)[0], text
 
     def test_load_config_refuses_a_mismatched_contract(self):
         """加载配置时就把关，不必等编排脚本比对。"""
@@ -555,8 +567,7 @@ class TestBadConfigValuesGiveDiagnosticsNotTracebacks:
         assert name in message, message
         assert "必须是路径" in message, message
 
-    @pytest.mark.parametrize("name", ["FROZEN", "BOUNDARY_DIRS",
-                                      "DETAIL_DIRS", "AUDIT_FILES_GLOBS"])
+    @pytest.mark.parametrize("name", ["FROZEN"])
     def test_non_list_value_is_rejected(self, tmp_path, name):
         _config, code, message = self._load(tmp_path, name, "12345")
         assert config_module.CONFIG_BAD_VALUE == code, (code, message)
@@ -631,22 +642,3 @@ class TestUnknownKeys:
         assert config_module.OK == code
         assert "LOG_DIR" in config.unknown_keys
         assert "CLANG_TIDY_CONFIG" in config.unknown_keys
-
-    def test_typo_is_reported_as_an_error(self, tmp_path):
-        config, _code, _message = self._load(
-            tmp_path, "BUILD_DIRS = [ROOT / \"build\"]\n")
-        found = audit.probable_typos(config)
-        assert [("BUILD_DIRS", "BUILD_DIR")] == found, found
-        messages = []
-        code = audit._check_unknown_keys(config, messages)
-        assert errors.AUDIT_UNKNOWN_KEY == code, messages
-        assert "BUILD_DIR" in messages[0], messages
-
-    def test_a_key_from_the_other_side_is_not_an_error(self, tmp_path):
-        """另一侧的键、使用者自己的常量都不该把门禁判红。"""
-        config, _code, _message = self._load(
-            tmp_path, "CLANG_TIDY_CONFIG = 1\nMY_OWN_CONSTANT = 2\n")
-        assert [] == audit.probable_typos(config)
-        messages = []
-        code = audit._check_unknown_keys(config, messages)
-        assert config_module.OK == code, messages

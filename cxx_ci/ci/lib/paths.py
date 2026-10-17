@@ -50,6 +50,9 @@ def is_frozen(path, frozen):
     两个方向都要看：删除是按目录树自顶向下走的，`build/third_party` 这个上层
     目录本身不在禁改区内，但删掉它就把里面的冻结产物一起删了。只看"在禁改区
     内"会让红线在删除场景下形同虚设。
+
+    **standardize 侧同名但只做单向判定**（那一侧判的是"能不能写这个文件"，
+    文件落在禁改区里才叫越界）。两侧调用场景不同，判定刻意不同，不要互换。
     """
     return any(is_within(path, item) or is_within(item, path)
                for item in frozen or ())

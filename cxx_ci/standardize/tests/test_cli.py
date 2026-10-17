@@ -63,15 +63,11 @@ def test_contract_declaration_may_be_omitted(project):
     assert "契约版本" not in err
 
 
-def test_apply_naming_without_apply_is_rejected(project):
-    """--apply-naming 是 --apply 的范围开关，单用是空操作，必须当场拒绝。
-
-    不拒绝的代价是误导诊断方向：满屏诊断 + 非零退出码 + 一个字节没写，使用者
-    会读成"命名改不动"，进而怀疑整个命名功能。
-    """
-    _code, out, err = project.run(["style", "--apply-naming"])
-    assert 2 == _code, (out, err)
-    assert "必须与 --apply 同用" in err
+def test_style_apply_is_accepted_without_extra_switch(project):
+    """--apply 的语义包含命名，无需额外开关。"""
+    _code, out, err = project.run(["style", "--apply"])
+    assert "apply_naming" not in err
+    assert "unrecognized" not in err
 
 
 def test_all_apply_enables_naming_without_the_flag(project):

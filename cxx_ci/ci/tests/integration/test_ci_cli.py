@@ -40,11 +40,11 @@ class TestCiCli(SandboxCase):
     def test_skipping_every_selected_stage_is_reported(self):
         """筛完一个阶段都不剩时必须出声。
 
-        `--only boundary --skip boundary` 什么都不跑；默默退出 0 等于告诉使用者
+        `--only clean --skip clean` 什么都不跑；默默退出 0 等于告诉使用者
         "跑过了、没问题"，而实际上一段都没跑。
         """
         code, out, err = self.box.run(
-            "ci.py", ["--only", "boundary", "--skip", "boundary"])
+            "ci.py", ["--only", "clean", "--skip", "clean"])
         assert 0 != code, (out, err)
         assert "没有可执行的阶段" in (out + err), (out, err)
 
@@ -56,7 +56,7 @@ class TestCiCli(SandboxCase):
         """
         target = os.path.join(str(self.box.path), "a.json,b.json")
         code, out, err = self.box.run(
-            "ci.py", ["--only", "boundary", "--report", target])
+            "ci.py", ["--only", "clean", "--report", target])
         assert 0 == code, (out, err)
         assert "只收一个路径" in err, err
         assert not os.path.isdir(target + ","), "不该造出名字带逗号的目录"
@@ -76,7 +76,7 @@ class TestCiCli(SandboxCase):
         self.box.stage("build", "")
         self.box.stage("run_test", "")
         code, out, err = self.box.run("ci.py",
-                                      ["--only", "build,run_test", "--no-audit"])
+                                      ["--only", "build,run_test"])
         assert 0 == code
         assert 'build' in out
         assert 'memcheck' not in out
@@ -108,7 +108,7 @@ class TestCiCli(SandboxCase):
             handle.write("project(p)\n")
         self.box.stage("build", ECHO_ARGV)
         code, out, err = self.box.run(
-            "ci.py", ["--only", "build", "--no-audit", "--level", "verbose",
+            "ci.py", ["--only", "build", "--level", "verbose",
                       "--config", str(path)])
         assert 0 == code, (out, err)
         # 构建目录来自那份配置（工具自带的配置里是 build/），证明配置被采纳
@@ -177,7 +177,12 @@ class TestCiCli(SandboxCase):
         # 追加在配置末尾：模块级后赋值生效，也兼容模板里没有该项的情况
         if env:
             extra += "\nTEST_ENV = " + repr(env) + "\n"
-        self.box.configure(text + extra)
+        # 探针脚本用 "FAIL!  : <用例> <原因>" 报逐例失败，用 regex 适配器识别；
+        # caller 的 extra 排在最后，可覆盖成别的适配器
+        defaults = ('\nTEST_REPORT_ADAPTER = "regex"\n'
+                    'TEST_FAIL_PATTERN = r"^FAIL!\\s+:\\s*(?P<case>\\S+)"\n'
+                    'TEST_TOTAL_PATTERN = r"Totals:\\s*(?P<total>\\d+) passed"\n')
+        self.box.configure(text + defaults + extra)
 
     def test_run_test_fails_on_per_case_failure_with_zero_exit(self):
         """逐例失败但 runner 退出 0，必须判失败。
@@ -294,7 +299,7 @@ class TestCiCli(SandboxCase):
     def test_contract_declaration_may_be_omitted(self):
         """不声明契约版本（模板就是这样）时静默通过，取工具缺省。"""
         self.box.stage("build", "")
-        code, out, err = self.box.run("ci.py", ["--only", "build", "--no-audit"])
+        code, out, err = self.box.run("ci.py", ["--only", "build"])
         assert 0 == code
 
     def test_build_dir_default_comes_from_config(self):
@@ -428,10 +433,11 @@ class TestCiCli(SandboxCase):
     def test_multi_suite_totals_are_summed_in_summary(self):
         """多套件 runner 的用例总数必须是各段之和。"""
         self.probe_command(
-            "echo 'Totals: 11 passed, 0 failed, 0 skipped, 0 blacklisted'\n"
-            "echo 'Totals: 15 passed, 0 failed, 0 skipped, 0 blacklisted'\n"
-            "echo 'Totals: 8 passed, 0 failed, 0 skipped, 0 blacklisted'\n"
-            "exit 0\n")
+            "echo '[==========] 11 tests from 1 test suite ran. (0 ms total)'\n"
+            "echo '[==========] 15 tests from 1 test suite ran. (0 ms total)'\n"
+            "echo '[==========] 8 tests from 1 test suite ran. (0 ms total)'\n"
+            "exit 0\n",
+            extra='\nTEST_REPORT_ADAPTER = "gtest"\n')
         code, out, err = self.box.run("ci.py", ["--only", "run_test"])
         assert 0 == code
         logs = list((self.box.path / "build" / "ci-logs").glob("run_test.log"))
@@ -458,7 +464,7 @@ class TestReportCli(SandboxCase):
     def test_json_report_written_and_same_source(self):
         self.box.stage("build", PROBE_DIAG)
         code, out, err = self.box.run(
-            "ci.py", ["--only", "build", "--no-audit",
+            "ci.py", ["--only", "build",
                       "--report=build/ci-report.json"])
         assert 0 == code, (out, err)
         document = self._read("build/ci-report.json")
@@ -475,26 +481,25 @@ class TestReportCli(SandboxCase):
     def test_report_to_stdout_is_clean_json_under_quiet(self):
         self.box.stage("build", "")
         code, out, err = self.box.run(
-            "ci.py", ["--only", "build", "--no-audit", "--level", "quiet",
+            "ci.py", ["--only", "build", "--level", "quiet",
                       "--report"])
         assert 0 == code, (out, err)
         document = json.loads(out.strip())
         assert "build" == document["stages"][0]["name"]
         assert "passed" == document["stages"][0]["status"]
 
-    def test_multiple_formats_get_suffixes(self):
+    def test_report_format_is_json(self):
         self.box.stage("build", "")
         code, out, err = self.box.run(
-            "ci.py", ["--only", "build", "--no-audit", "--level", "quiet",
-                      "--report=build/rep", "--report-format", "junit,sarif"])
+            "ci.py", ["--only", "build", "--level", "quiet",
+                      "--report=build/rep", "--report-format", "json"])
         assert 0 == code, (out, err)
-        assert (self.box.path / "build" / "rep.xml").is_file()
-        assert (self.box.path / "build" / "rep.sarif").is_file()
+        assert (self.box.path / "build" / "rep").is_file()
 
     def test_skipped_stage_stays_skipped(self):
         self.box.stage("build", SKIP_STAGE)
         code, out, err = self.box.run(
-            "ci.py", ["--only", "build", "--no-audit",
+            "ci.py", ["--only", "build",
                       "--report=build/ci-report.json"])
         assert 0 == code, (out, err)
         document = self._read("build/ci-report.json")
@@ -504,7 +509,7 @@ class TestReportCli(SandboxCase):
     def test_failing_stage_still_writes_report(self):
         self.box.stage("build", FAIL)
         code, out, err = self.box.run(
-            "ci.py", ["--only", "build", "--no-audit",
+            "ci.py", ["--only", "build",
                       "--report=build/ci-report.json"])
         assert 0 != code
         document = self._read("build/ci-report.json")
@@ -514,49 +519,9 @@ class TestReportCli(SandboxCase):
         """格式写错只警告，不改退出码。"""
         self.box.stage("build", "")
         code, out, err = self.box.run(
-            "ci.py", ["--only", "build", "--no-audit", "--level", "quiet",
+            "ci.py", ["--only", "build", "--level", "quiet",
                       "--report=build/x.json", "--report-format", "yaml"])
         assert 0 == code, (out, err)
         assert "未知报告格式" in err
         assert not (self.box.path / "build" / "x.json").is_file()
-
-
-class TestInitCli(SandboxCase):
-    """`ci.py init`：探测生成配置，不需要已有配置。"""
-
-    def write_build_file(self, text="project(x)\nenable_testing()\n"):
-        with open(str(self.box.path / "CMakeLists.txt"), "w",
-                  encoding="utf-8") as handle:
-            handle.write(text)
-
-    def test_writes_config_and_names_todos(self):
-        self.write_build_file()
-        code, out, err = self.box.run(
-            "ci.py", ["init", "--project-root", str(self.box.path)])
-        assert 0 == code, (out, err)
-        assert (self.box.path / "config" / "ci.py").is_file()
-        assert "已生成" in out
-
-    def test_generated_config_is_usable(self):
-        """生成物必须能被 load_config 接受，并被后续阶段采纳。"""
-        self.write_build_file()
-        self.box.stage("build", ECHO_ARGV)
-        code, out, err = self.box.run(
-            "ci.py", ["init", "--project-root", str(self.box.path)])
-        assert 0 == code, (out, err)
-        code, out, err = self.box.run(
-            "ci.py", ["--only", "build", "--no-audit", "--level", "verbose",
-                      "--config", str(self.box.path / "config" / "ci.py")])
-        assert 0 == code, (out, err)
-        assert "ARGV --build-type debug --build-dir {}/build --jobs 0".format(
-            self.box.path) in out
-
-    def test_does_not_overwrite_existing_config(self):
-        target = self.box.path / "config" / "ci.py"
-        with open(str(target), "w", encoding="utf-8") as handle:
-            handle.write("# 人工写好的配置\n")
-        code, out, err = self.box.run(
-            "ci.py", ["init", "--project-root", str(self.box.path)])
-        assert code != 0
-        assert "不覆盖" in err
 

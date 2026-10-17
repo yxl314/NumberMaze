@@ -80,7 +80,7 @@ def environment_lines(config=None, find=None, run=None):
         path = explicit or find([name])
         if not path:
             lines.append("{}: 未找到（apt 装 clang-tools，"
-                         "或 pip install -r requirements/standardize-clang17.txt）"
+                         "或 pip install -r requirements/standardize.txt）"
                          .format(name))
             continue
         mark = "（显式指定）" if explicit else (

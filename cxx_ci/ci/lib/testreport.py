@@ -23,7 +23,7 @@ from .errors import (OK, TEST_REPORT_BAD_ADAPTER,
                      TEST_REPORT_BAD_PATTERN)
 
 # 适配器名，按 auto 的试探顺序排列
-ADAPTERS = ("auto", "gtest", "qtest", "catch2", "regex", "exit-code")
+ADAPTERS = ("auto", "gtest", "regex", "exit-code")
 
 # 一条逐例失败
 # 与协议行同型：解析结果最终要发成 #fail 协议行，不另造一个类型
@@ -54,25 +54,6 @@ _GTEST_MARK = re.compile(r"^\[\s+(?:RUN|OK|FAILED)\s+\]|^\[[-=]")
 _GTEST_TOTAL = re.compile(
     r"^\[=+\]\s+(?P<total>\d+)\s+tests?\s+from\s+(?P<suites>\d+)\s+"
     r"test\s+(?:suites?|cases?)\s+ran\.", re.MULTILINE)
-
-_QT_PROBE = re.compile(
-    r"^\*{5,}\s*Start testing|^FAIL!\s+:|^Totals:\s*\d+\s+passed",
-    re.MULTILINE)
-_QT_FAIL = re.compile(
-    r"^\s*FAIL!\s*:\s*(?P<case>\S+?\([^)]*\)|\S+)\s*(?P<reason>.*)$")
-_QT_TOTAL = re.compile(r"^Totals:\s*(?P<body>.*)$", re.MULTILINE)
-_QT_TOTAL_ITEM = re.compile(r"(\d+)\s+(passed|failed|skipped|blacklisted)")
-
-_CATCH_PROBE = re.compile(
-    r"^~{20,}$|^\.{20,}$|^test cases:\s*\d+|^\s*\S+:\d+:\s*FAILED:",
-    re.MULTILINE)
-_CATCH_RULE = re.compile(r"^-{20,}$")
-_CATCH_FAIL = re.compile(
-    r"^\s*(?P<file>\S.*?):(?P<line>\d+):\s*FAILED:\s*(?P<rest>.*)$")
-_CATCH_TOTAL = re.compile(
-    r"^test cases:\s*(?P<total>\d+)\s*\|"
-    r"|^All tests passed \(\d+ assertions? in (?P<all>\d+) test cases?\)",
-    re.MULTILINE)
 
 
 # --------------------------------------------------------------- 逐框架实现
@@ -119,65 +100,6 @@ def _gtest_reason(lines, index):
     return location
 
 
-def _qtest_failures(text):
-    """qtest 的逐例失败，原因取 FAIL! 行冒号后的剩余文本。"""
-    failures = []
-    for line in text.splitlines():
-        match = _QT_FAIL.match(line)
-        if match:
-            failures.append(Failure(match.group("case"),
-                                    match.group("reason").strip()))
-    return failures
-
-
-def _catch2_failures(text):
-    """catch2 的逐例失败。
-
-    失败行只有来源与断言，没有用例名；用例名在上一个 "---" 分隔的标题块
-    里，多行表示嵌套 section，按 " / " 拼起来。标题块缺失时退回来源。
-    """
-    lines = text.splitlines()
-    failures, seen, header, case = [], set(), None, None
-    for index, line in enumerate(lines):
-        if _CATCH_RULE.match(line):
-            if header is None:
-                header = []
-            else:
-                if header:
-                    case = " / ".join(header)
-                header = None
-            continue
-        if header is not None:
-            piece = line.strip()
-            if piece:
-                header.append(piece)
-            continue
-        match = _CATCH_FAIL.match(line)
-        if not match:
-            continue
-        name = case or match.group("file")
-        if name in seen:
-            continue
-        seen.add(name)
-        reason = match.group("rest").strip()
-        if not reason:
-            reason = _catch2_expression(lines, index)
-        failures.append(Failure(name, reason))
-    return failures
-
-
-def _catch2_expression(lines, index):
-    """失败行下面第一个非空行就是断言表达式。"""
-    for forward in range(index + 1, len(lines)):
-        line = lines[forward].strip()
-        if not line:
-            continue
-        if _CATCH_RULE.match(line) or line.startswith("with expansion"):
-            return ""
-        return line
-    return ""
-
-
 def _gtest_total(text):
     """累加每一段汇总行。
 
@@ -193,37 +115,9 @@ def _gtest_total(text):
     return Totals(cases, suites) if found else None
 
 
-def _qtest_total(text):
-    """累加全部 Totals 行。
-
-    Totals 行分别给 passed/failed/skipped/blacklisted，只有求和才是该行的
-    用例总数；多套件 runner 会打印多行，必须逐行求和。套件数就是汇总行条数
-    ——QTest 的 Totals 一行对应一个测试可执行文件，框架不再单独报套件数。
-    """
-    cases, suites = 0, 0
-    for match in _QT_TOTAL.finditer(text):
-        counts = _QT_TOTAL_ITEM.findall(match.group("body"))
-        if not counts:
-            continue
-        cases += sum(int(value) for value, _ in counts)
-        suites += 1
-    return Totals(cases, suites) if suites else None
-
-
-def _catch2_total(text):
-    """累加全部汇总行，套件数取汇总行条数。"""
-    cases, suites = 0, 0
-    for match in _CATCH_TOTAL.finditer(text):
-        cases += int(match.group("total") or match.group("all"))
-        suites += 1
-    return Totals(cases, suites) if suites else None
-
-
 # 适配器名到探测规则的映射，顺序即 auto 的试探顺序
 _FRAMEWORKS = collections.OrderedDict((
     ("gtest", _Framework(_GTEST_PROBE, _gtest_failures, _gtest_total)),
-    ("qtest", _Framework(_QT_PROBE, _qtest_failures, _qtest_total)),
-    ("catch2", _Framework(_CATCH_PROBE, _catch2_failures, _catch2_total)),
 ))
 
 

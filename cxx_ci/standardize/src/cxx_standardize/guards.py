@@ -1,26 +1,23 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""内部面边界：detail:: 归属与头文件宏守卫。
+"""代码守卫：头文件宏守卫与 detail:: 越界。
 
-两条纪律都是"仓内代码的内部面"问题，与禁改区写保护（那是"不许写"）不同：
+这两项是"仓内代码的内部面"纪律，与排版/风格无关，但都需要读源码；放在本侧
+（现代 Python、可用库）比放在只跑流程的 ci 侧更合适。
 
-  - detail:: 只应出现在模块自己的目录里。越出模块目录去用别人的 detail::
-    意味着绕过门面直接调内部实现，只能人工改回公开入口，因此**不提供自动修**。
-  - 头文件的宏守卫名由相对路径决定：路径即身份，天然唯一，移动文件即强制改名。
+  - 宏守卫名由文件相对路径决定：路径即身份，移动文件即强制改名，可自动修。
+  - detail:: 只应出现在模块自己的目录里，越界意味着绕过门面调内部实现，只能
+    人工改回公开入口。
 
-判据都在配置里（DETAIL_DIRS / DETAIL_MARK / GUARD_EXTS），本模块不写死任何
-具体项目的事实。
+判据都在配置里（BOUNDARY_DIRS / DETAIL_DIRS / DETAIL_MARK / GUARD_EXTS），
+本模块不写死任何具体项目的事实。
 """
 
 import os
 import re
-import sys
-if sys.version_info < (3, 4):
-    sys.exit("需要 Python 3.4 或更高版本，请用 python3 运行")
 
-from . import paths, source
+from . import log, paths, source
+from .errors import Code
 
-# detail:: 检查要覆盖全部源文件；宏守卫只对头文件有意义，再由 GUARD_EXTS 筛一次
+# 收集源文件用：两类检查都要扫全部源文件，宏守卫再按 GUARD_EXTS 筛一次
 SOURCE_EXTS = (".h", ".hh", ".hpp", ".hxx", ".h++", ".inl", ".ipp",
                ".c", ".cc", ".cpp", ".cxx", ".c++", ".cu", ".cuh")
 
@@ -33,9 +30,8 @@ _DEFINE = re.compile(r"^\s*#\s*define\s+([A-Za-z_]\w*)\s*$")
 def strip_comments(text):
     """把注释换成等长空格，保持行列对齐。
 
-    在剥除结果上搜关键字，注释里提到 detail:: 才不会误报——这是"允许在注释里
-    说明内部实现"的前提。字面量只跳过不替换：它是代码，原样留着；不跳过的话
-    字符串里的 // 会把后半行当注释，真正的代码反而被剥掉。
+    在剥除结果上搜关键字，注释里提到 detail:: 才不会误报。字面量只跳过不替换：
+    字符串里的 // 不会把后半行当注释，真正的代码不会被剥掉。
     """
     out = []
     index = 0
@@ -101,19 +97,14 @@ def _skip_raw(text, index):
 
 
 def read_text(path):
-    """读文本；读不了返回空串（调用方按"没有内容"处理）。
-
-    读不了的情况真实存在：悬空软链、权限不足、文件在两次遍历之间被删掉。以前
-    这里直接 open，一个读不到的文件就让整段只读检查崩栈退出，同一轮里别的结论
-    一条都报不出来——而 docstring 承诺的是返回空串。
-    """
+    """读文本；读不了返回空串（调用方按"没有内容"处理）。"""
     try:
         handle = open(str(path), "rb")
-    except (IOError, OSError):
+    except OSError:
         return ""
     try:
         return handle.read().decode("utf-8", "replace")
-    except (IOError, OSError):
+    except OSError:
         return ""
     finally:
         handle.close()
@@ -202,9 +193,7 @@ def guard_report(files, root, exts):
 def fix_guards(report, config=None):
     """按报告补齐或改正守卫，返回改动过的文件列表。
 
-    只动守卫三处（#ifndef / #define / 末尾 #endif 的注释），不碰文件其余内容：
-    插入点取"文首空行与注释块之后"，改名只在原有行上原地替换。
-
+    只动守卫三处（#ifndef / #define / 末尾 #endif 的注释），不碰文件其余内容。
     写回一律走 source：判定不出编码的文件跳过并说明，绝不用 UTF-8 覆盖掉用户
     的 GBK/其它编码存量文件。跳过的文件仍留在 report 里，由调用方照常判红。
     """
@@ -212,7 +201,7 @@ def fix_guards(report, config=None):
     for path, want, found, problem in report:
         text, info = source.read_source(path, config)
         if text is None:
-            sys.stderr.write("编码无法确定（{}）: {}，本文件不会被改写\n".format(
+            log.err("编码无法确定（{}）: {}，本文件不会被改写".format(
                 info.reason, path))
             continue
         if problem == "missing":
@@ -223,13 +212,11 @@ def fix_guards(report, config=None):
             text = _rename_guard(text, found, want)
         hit, why = paths.write_blocked(config, path)
         if hit:
-            # 工程内的软链指向工程外时，按链接路径看它在范围里，实际被改写的
-            # 是外面那个共享头文件——而这份命令是本工具自己在输出里给出的
-            sys.stderr.write("拒绝改写 {}（{}）\n".format(path, why))
+            log.err("拒绝改写 {}（{}）".format(path, why))
             continue
         code, message = source.write_source(path, text, info)
         if code != 0:
-            sys.stderr.write("{}\n".format(message))
+            log.err(message)
             continue
         changed.append(path)
     return changed
@@ -252,11 +239,7 @@ def _insert_guard(text, want):
 
 
 def _complete_guard(text, name):
-    """补上配对的 #define，并把 #endif 的注释统一成守卫名。
-
-    残缺的守卫等于没生效，但既然 #ifndef 已经写了，就地补一行比整块重插更贴近
-    作者原意，也不会把原有的注释挤走。
-    """
+    """补上配对的 #define，并把 #endif 的注释统一成守卫名。"""
     lines = []
     inserted = False
     for line in text.splitlines(True):
@@ -264,8 +247,7 @@ def _complete_guard(text, name):
         if not inserted and _IFNDEF.match(line):
             lines.append("#define {}\n".format(name))
             inserted = True
-    body = "".join(lines)
-    return _ensure_endif_comment(body, name)
+    return _ensure_endif_comment("".join(lines), name)
 
 
 def _ensure_endif_comment(text, name):
@@ -297,6 +279,13 @@ def _rename_guard(text, found, want):
     return "".join(lines)
 
 
+def leak_report(config):
+    """detail:: 越界清单，返回 (文件列表, [(文件, 行号, 行内容)])。"""
+    files = source_files(config.boundary_dirs, SOURCE_EXTS)
+    leaks = find_detail_leaks(files, config.detail_dirs, config.detail_mark)
+    return files, leaks
+
+
 def describe(report):
     """把守卫报告渲染成一行行结论。"""
     notes = []
@@ -310,3 +299,44 @@ def describe(report):
             notes.append("{}: 宏守卫名不符，现为 {}，期望 {}"
                          .format(path, found, want))
     return notes
+
+
+def run(config, fix=False):
+    """执行守卫检查，返回错误码。fix 为真时自动补/改宏守卫。"""
+    files = source_files(config.boundary_dirs, SOURCE_EXTS)
+    if not files:
+        log.out("没有需要检查的文件")
+        return Code.OK
+    code = Code.OK
+    leaks = find_detail_leaks(files, config.detail_dirs, config.detail_mark)
+    if leaks:
+        log.err("{} 处 {} 越出模块目录:".format(len(leaks),
+                                               config.detail_mark))
+        for path, number, line in leaks:
+            log.out("    {}:{}: {}".format(path, number, line))
+        log.out("若本工程的 {} 就是某个目录的内部实现层，"
+                "把该目录写进 DETAIL_DIRS".format(config.detail_mark))
+        code = Code.DETAIL_LEAK
+    else:
+        log.out("{} 未越出模块目录".format(config.detail_mark))
+
+    report = guard_report(files, config.root, config.guard_exts)
+    if report and fix:
+        changed = fix_guards(report, config)
+        log.out("已修正 {} 个头文件的宏守卫".format(len(changed)))
+        report = guard_report(files, config.root, config.guard_exts)
+    if report:
+        for note in describe(report):
+            log.err(note)
+        if not fix:
+            log.out("补齐或改正守卫: standardize guard --fix")
+        kinds = set(item[3] for item in report)
+        if "missing" in kinds:
+            code = Code.GUARD_MISSING
+        elif "misnamed" in kinds:
+            code = Code.GUARD_MISNAMED
+        else:
+            code = Code.GUARD_BROKEN
+    else:
+        log.out("头文件宏守卫齐备且命名正确")
+    return code

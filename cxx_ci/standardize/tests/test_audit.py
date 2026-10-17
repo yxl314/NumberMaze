@@ -1,8 +1,7 @@
 """配置审计的单元测试。
 
 各条判据各测正反两面：死配置、配置旁路（含 docstring 排除）、编译标准锁定
-（含注释里的 -std=）、裸写文本、自行前缀比较。构建文件全用临时文件，不依赖
-机器上装没装 cmake。
+（含注释里的 -std=）。构建文件全用临时文件，不依赖机器上装没装 cmake。
 """
 
 from pathlib import Path
@@ -168,49 +167,13 @@ def test_targets_recurse_and_keep_only_python(tmp_path):
     assert [] == messages
 
 
-def test_default_targets_covers_package_and_globs(tmp_path):
-    """缺省对象包含本包自身的实现代码与 AUDIT_FILES_GLOBS。"""
-    project = tmp_path / "project"
-    write(project / "a.py", "VALUE = 1\n")
-    config = SimpleNamespace(root=str(tmp_path),
-                             audit_files_globs=["project/*.py"])
+def test_default_targets_covers_package_and_config(tmp_path):
+    """缺省对象包含本包自身的实现代码与项目配置。"""
+    config = SimpleNamespace(root=str(tmp_path))
     files = [str(item) for item in
              audit.collect_files(audit.default_targets(config))]
     assert any(item.endswith("audit.py") for item in files)
     assert any(item.endswith("config.py") for item in files)
-    assert any(item.endswith("a.py") for item in files)
-
-
-# -------------------------------------------------------- 检查 5: 自行前缀比较
-
-# 违反写法由片段拼出，免得本测试文件自己也被这条检查命中
-_PREFIX_VIOLATION = ("def probe(p, root):\n"
-                     "    return p." + "startswith" + "(root + "
-                     + "os" + "." + "sep" + ")\n")
-
-
-def test_self_made_prefix_compare_is_reported(tmp_path, monkeypatch):
-    target = write(tmp_path / "probe.py", _PREFIX_VIOLATION)
-    monkeypatch.setattr(audit, "PACKAGE_DIR", tmp_path)
-    code, messages = audit.run(SimpleNamespace(), [target])
-    assert Code.AUDIT_PREFIX_DRIFT == code
-    assert "probe.py" in "\n".join(messages)
-
-
-def test_paths_py_is_whitelisted(tmp_path, monkeypatch):
-    """paths.py 就是那个唯一实现，它自己写前缀比较不算违规。"""
-    target = write(tmp_path / "paths.py", _PREFIX_VIOLATION)
-    monkeypatch.setattr(audit, "PACKAGE_DIR", tmp_path)
-    code, messages = audit.run(SimpleNamespace(), [target])
-    assert Code.OK == code, messages
-    assert [] == messages
-
-
-def test_prefix_compare_in_project_script_is_ignored(tmp_path):
-    """项目脚本不在范围：只拦本包自身的实现代码。"""
-    target = write(tmp_path / "probe.py", _PREFIX_VIOLATION)
-    code, messages = audit.run(SimpleNamespace(), [target])
-    assert Code.OK == code, messages
 
 
 def test_no_audit_switch_exists():

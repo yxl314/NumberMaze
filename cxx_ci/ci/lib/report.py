@@ -1,23 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""机器可读报告：内部 schema 与三个 writer。
+"""机器可读报告：内部 schema。
 
 报告是**旁路产物**：它只搬运阶段已经算出的结论（状态、诊断、失败、摘要），
 不在 writer 里新增任何判定分支——否则终端与报告迟早会打架。schema 在
 CONTRACT.md 登记，ci 与 standardize 两侧各有一份平行实现，共用同一份 JSON
 定义而不共享代码。
 
-三种格式：
-
-    json   默认，直接落盘内部 schema，便于两次运行做 diff
-    junit  每阶段一个 <testsuite>，逐例失败一个 <testcase>；三态靠 <skipped>
-    sarif  每条诊断一条 result，带 ruleId 与 region；xfail 记为已知（已知问题
-           既不是失败也不是通过）
+格式是 json：直接落盘内部 schema，便于两次运行做 diff。
 
 所有取值都来自既有的阶段结果对象、协议行、归因结果与登记清单，报告只做搬运。
 """
 
-import hashlib
 import json
 import os
 import re
@@ -26,7 +20,7 @@ import sys
 if sys.version_info < (3, 4):
     sys.exit("需要 Python 3.4 或更高版本，请用 python3 运行")
 
-from . import tools, xfail
+from . import source, tools, xfail
 from .errors import KIND_SKIPPED, OK, kind
 from .output import out as _stdout
 from .stage import first_line, log_path, stage_view
@@ -35,11 +29,11 @@ from .version import CONTRACT_VERSION, __version__
 # 内部 schema 的版本。schema 变化时自增，与工具版本、契约版本分开演进。
 REPORT_VERSION = 1
 
-# 支持的报告格式；多格式可逗号并列
-FORMATS = ("json", "junit", "sarif")
+# 支持的报告格式
+FORMATS = ("json",)
 
 # 多格式并列写文件时给各格式加的后缀；单格式直接写在 --report 指定的路径上
-EXTENSIONS = {"json": "json", "junit": "xml", "sarif": "sarif"}
+EXTENSIONS = {"json": "json"}
 
 # 阶段三态。跳过既不是通过也不是失败，在报告里仍是独立一档。
 STATUS_PASSED = "passed"
@@ -53,8 +47,6 @@ DIGEST_KEYS = ("BUILD_TOOL", "SCOPE", "MEMCHECK_TOOL", "MEMCHECK_SCOPE",
 
 # 诊断消息尾部的检查名：clang-tidy 的 [check-name]、编译告警的 [-Wxxx]
 _CHECK = re.compile(r"\[(?P<name>[^\[\]]+)\]\s*$")
-
-_SARIF_LEVELS = {"error": "error", "warning": "warning", "note": "note"}
 
 
 # ------------------------------------------------------------------ 取值搬运
@@ -74,11 +66,26 @@ def status_of(result, skipped_stage):
     return STATUS_FAILED
 
 
-def diagnostic_entry(item, count, xfail_flag):
+def relative_path(root, path):
+    """把绝对路径折成相对工程根的路径；折不动就原样返回。
+
+    绝对路径里含检出目录：同一份源码换个目录检出，路径全变。
+    """
+    if not root or not path:
+        return path or ""
+    root = os.path.abspath(str(root)).rstrip(os.sep) + os.sep
+    text = os.path.abspath(str(path))
+    if text.startswith(root):
+        return text[len(root):]
+    return text
+
+
+def diagnostic_entry(item, count, xfail_flag, root=""):
     """把一条归因后的诊断搬成报告条目。"""
     return {
         "level": item.level,
         "file": item.file,
+        "path": relative_path(root, item.file),
         "line": item.line,
         "column": item.column,
         "message": item.message,
@@ -187,10 +194,30 @@ def _checklist(config):
     return checklist
 
 
-def build(config, records, skipped=()):
+def conclusion_of(code, detail=""):
+    """把入口的退出码折成报告里的整体结论。
+
+    报告不判卷：这里只是把入口已经做出的判定搬成结构化字段。code 为 None 时
+    不写这一项（调用方没给判定，就不假装有）。
+    """
+    if code is None:
+        return None
+    value = int(code)
+    return {
+        "code": value,
+        "status": STATUS_PASSED if value == 0 else STATUS_FAILED,
+        "detail": str(detail or ("通过" if value == 0 else "运行未完成")),
+    }
+
+
+def build(config, records, skipped=(), conclusion=None):
     """把阶段结果搬成内部 schema 的报告字典。
 
     records 是 stage.Result 的序列；skipped 是当前机器上不可用的阶段名集合。
+
+    conclusion 是入口给出的整体结论（退出码 + 一句话）。报告是**搬运工**：
+    它不自己判卷，但必须把入口的判定带出去——没有这一项时，"一段都没跑就
+    失败"的报告在平台眼里是"零失败零跳过"，等于把一次失败静默成通过。
     """
     skipped = set(skipped or ())
     checklist = _checklist(config)
@@ -199,7 +226,7 @@ def build(config, records, skipped=()):
         view = stage_view(config, result)
         stage_skipped = (result.name in skipped
                          or kind(result.code) == KIND_SKIPPED)
-        diagnostics = [diagnostic_entry(item, count, False)
+        diagnostics = [diagnostic_entry(item, count, False, config.root)
                        for item, count in view["diagnostics"]]
         # 失败清单来自两个通道：#fail 是真要修的，#xfail 是已登记的存量。
         # 报告**不**拿 checklist 重判——判定由阶段负责，否则终端与报告迟早
@@ -228,7 +255,7 @@ def build(config, records, skipped=()):
             "skipped_reason": reason,
             "log": log_path(config, result.name),
         })
-    return {
+    document = {
         "report_version": REPORT_VERSION,
         "tool": tool_info(),
         "environment": environment(),
@@ -236,6 +263,15 @@ def build(config, records, skipped=()):
         "baseline": baseline(config, checklist),
         "stages": stages,
     }
+    if conclusion:
+        document["conclusion"] = conclusion
+    # 自相矛盾的搬运结果要被看见：阶段判绿却有逐例失败，说明上游哪里出了问题
+    # （伪造的协议行就是一条来路）。报告不重判，但也不该把矛盾原样发出去
+    inconsistent = [stage["name"] for stage in stages
+                    if stage["status"] == STATUS_PASSED and stage["failures"]]
+    if inconsistent:
+        document["inconsistent"] = inconsistent
+    return document
 
 
 # ------------------------------------------------------------------ JSON
@@ -246,175 +282,24 @@ def to_json(document):
                       ensure_ascii=False) + "\n"
 
 
-# ------------------------------------------------------------------ JUnit
-
-def _xml(text):
-    """XML 文本转义（含属性用的引号）。"""
-    text = str(text if text is not None else "")
-    return (text.replace("&", "&amp;").replace("<", "&lt;")
-            .replace(">", "&gt;").replace('"', "&quot;")
-            .replace("'", "&apos;"))
-
-
-def _junit_suite(stage):
-    """一个阶段的 <testsuite>，返回 (文本, 计数)。
-
-    JUnit 只承载逐例失败：诊断归 SARIF，不在这里重复，第三方（owner 非
-    project）的诊断因此不会淹掉面板。三态里的"跳过"用 <skipped> 表达，
-    xfail 登记项也走 <skipped>——已知问题既不是 failure 也不是 pass。
-    """
-    name = _xml(stage["name"])
-    status = stage.get("status")
-    seconds = float(stage.get("seconds") or 0.0)
-    cases = []
-    counts = {"tests": 1, "failures": 0, "skipped": 0}
-    if status == STATUS_SKIPPED:
-        counts["skipped"] = 1
-        cases.append(
-            '    <testcase name="{}" classname="cxx_ci">\n'
-            '      <skipped message="{}"/>\n'
-            '    </testcase>\n'.format(
-                name, _xml(stage.get("skipped_reason") or "未说明原因")))
-    else:
-        fails = stage.get("failures") or []
-        if not fails:
-            # 没有逐例失败：通过给一条通过用例，失败给一条失败用例，否则
-            # 面板会把一个失败的阶段看成一例"通过"
-            if status == STATUS_FAILED:
-                counts["failures"] = 1
-                cases.append(
-                    '    <testcase name="{}" classname="cxx_ci">\n'
-                    '      <failure message="阶段失败">{}</failure>\n'
-                    '    </testcase>\n'.format(
-                        name, _xml(stage.get("summary") or "阶段失败")))
-            else:
-                cases.append(
-                    '    <testcase name="{}" classname="cxx_ci"/>\n'.format(
-                        name))
-        else:
-            counts["tests"] = len(fails)
-            for item in fails:
-                case = _xml(item.get("case") or "")
-                reason = _xml(item.get("reason") or "")
-                if item.get("xfail"):
-                    counts["skipped"] += 1
-                    cases.append(
-                        '    <testcase name="{}" classname="{}">\n'
-                        '      <skipped message="已登记 (xfail): {}"/>\n'
-                        '    </testcase>\n'.format(case, name, reason))
-                else:
-                    counts["failures"] += 1
-                    cases.append(
-                        '    <testcase name="{}" classname="{}">\n'
-                        '      <failure message="{}">{}</failure>\n'
-                        '    </testcase>\n'.format(case, name, reason, reason))
-    summary = stage.get("summary") or ""
-    system_out = ('    <system-out>{}</system-out>\n'.format(_xml(summary))
-                  if summary else "")
-    text = ('  <testsuite name="{}" tests="{}" failures="{}" skipped="{}" '
-            'time="{:.3f}">\n{}{}  </testsuite>\n').format(
-                name, counts["tests"], counts["failures"], counts["skipped"],
-                seconds, "".join(cases), system_out)
-    return text, counts
-
-
-def to_junit(document):
-    suites = []
-    tests = failures = skipped = 0
-    total_time = 0.0
-    for stage in document["stages"]:
-        text, counts = _junit_suite(stage)
-        suites.append(text)
-        tests += counts["tests"]
-        failures += counts["failures"]
-        skipped += counts["skipped"]
-        total_time += float(stage.get("seconds") or 0.0)
-    header = ('<?xml version="1.0" encoding="UTF-8"?>\n'
-              '<testsuites name="cxx_ci" tests="{}" failures="{}" skipped="{}" '
-              'time="{:.3f}">\n').format(tests, failures, skipped, total_time)
-    return header + "".join(suites) + "</testsuites>\n"
-
-
-# ------------------------------------------------------------------ SARIF
-
-def _fingerprint(path, check, message):
-    """跨运行可比的部分指纹：文件 + 检查名 + 消息摘要。
-
-    同一处告警在两次运行里给出同一条指纹，平台才能认出"还是那一条"，而不是
-    每次都当新问题。行号不进材料——行号随无关改动漂移，会让同一条告警变脸。
-    """
-    material = "\n".join([path or "", check or "", message or ""])
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()
-
-
-def _sarif_result(item):
-    path = item.get("file") or ""
-    check = item.get("check") or ""
-    message = item.get("message") or ""
-    result = {
-        "ruleId": check,
-        "level": _SARIF_LEVELS.get(item.get("level"), "warning"),
-        "message": {"text": message},
-        "partialFingerprints": {"cxx_ci/v1": _fingerprint(path, check, message)},
-        "properties": {
-            "owner": item.get("owner") or "",
-            "count": item.get("count", 1),
-        },
-    }
-    if path:
-        location = {"physicalLocation": {"artifactLocation": {"uri": path}}}
-        region = {}
-        line = int(item.get("line") or 0)
-        column = int(item.get("column") or 0)
-        if line > 0:
-            region["startLine"] = line
-        if column > 0:
-            region["startColumn"] = column
-        if region:
-            location["physicalLocation"]["region"] = region
-        result["locations"] = [location]
-    if item.get("xfail"):
-        # 已知问题：平台据此显示为"既非失败也非通过"
-        result["baselineState"] = "unchanged"
-        result["properties"]["knownIssue"] = True
-    return result
-
-
-def to_sarif(document):
-    results = []
-    for stage in document["stages"]:
-        for item in stage.get("diagnostics") or []:
-            results.append(_sarif_result(item))
-    run = {
-        "tool": {"driver": {
-            "name": "cxx_ci",
-            "version": __version__,
-            "informationUri": "",
-        }},
-        "results": results,
-        "properties": {
-            "contract": CONTRACT_VERSION,
-            "report_version": REPORT_VERSION,
-        },
-    }
-    schema = {
-        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
-        "version": "2.1.0",
-        "runs": [run],
-    }
-    return json.dumps(schema, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
-
-
 # ------------------------------------------------------------------ 落盘
+
+def _source_config():
+    """给 source.write_file 用的最小配置：只带编码判定所需的字段。"""
+    return _SourceConfig()
+
+
+class _SourceConfig(object):
+    """写自有的文本文件只需要"按什么编码读回已有的那一份"。"""
+
+    source_encoding = "utf-8"
+    source_encoding_candidates = ()
+
 
 def render(document, fmt):
     """按格式渲染报告文本。"""
     if fmt == "json":
         return to_json(document)
-    if fmt == "junit":
-        return to_junit(document)
-    if fmt == "sarif":
-        return to_sarif(document)
     raise ValueError("未知报告格式: " + str(fmt))
 
 
@@ -436,11 +321,13 @@ def write(document, target, formats):
             directory = os.path.dirname(path)
             if directory and not os.path.isdir(directory):
                 os.makedirs(directory)
-            handle = open(path, "w", encoding="utf-8")
-            try:
-                handle.write(render(document, fmt))
-            finally:
-                handle.close()
+            # 原子写：两份工具（或同一份的两个进程）写同一个报告路径时，
+            # 就地截断重写会互相破坏，读到的可能是半份文档；改名是原子的，
+            # 读到的要么是这一份、要么是那一份
+            code, message = source.write_file(path, render(document, fmt),
+                                              _source_config())
+            if code != 0:
+                raise IOError(message)
         except (IOError, OSError, ValueError, TypeError) as exc:
             problems.append("写报告失败 {}: {}".format(path, exc))
             continue

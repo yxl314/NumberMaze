@@ -24,10 +24,7 @@
 的字面量，锁定标准直接取 ``CXX_STANDARD``。
 
 本模块与 ci/lib/audit.py 为平行实现：两个项目互不 import，只靠文件与命令行契约
-协作（见 CONTRACT.md），因此同一套纪律被写成两份。改动须同步两侧，并跑
-tools/parity 的同固件对照测试（两侧各一份 test_audit_parity.py），否则两侧规则
-会静默分叉。本侧是参照实现（现代 Python、能跑全部判据），expected.json 由本侧
-实跑生成。
+协作（见 CONTRACT.md），因此同一套纪律被写成两份。改动须同步两侧。
 
 失败不抛异常，按本项目的约定返回 ``(Code, list[str])``。
 """
@@ -35,7 +32,6 @@ tools/parity 的同固件对照测试（两侧各一份 test_audit_parity.py）�
 from __future__ import annotations
 
 import ast
-import glob
 import os
 import re
 from pathlib import Path
@@ -57,72 +53,25 @@ STD_MARK = "-std="
 # 递归扫描时跳过的目录：版本库元数据与字节码缓存，都不是构建文件
 SKIP_DIRS = (".git", "__pycache__")
 
-# 配置对象上由加载流程写上去的提示，不是项目配置项
-NON_CONFIG_KEYS = ("warnings",)
-
 # 从配置对象取值时用的名字。按名字认，见 _is_config_base
 CONFIG_NAMES = ("cfg", "config", "conf", "settings")
 
 # 本模块自身：它是唯一参与检查 2 的自身代码，写它时就得经配置取值
 _AUDIT_SELF = Path(__file__).resolve()
 
-# 检查 4 的裸写文本写法：绕过 source.py 直接写回文本。唯一白名单是 source.py
-# ——它本身就是那个写入口。模式串写成正则片段而不是字面调用，本文件才不会被
-# 自己的检查命中
-RAW_IO_WHITELIST = "source.py"
-# 允许一层嵌套括号的片段，单独拼出来（见下）
-_NESTED_PARENS = r"(?:[^()]|\([^()]*\))*"
-RAW_IO_PATTERNS = (
-    # 允许一层嵌套括号。真实代码里模式的取法是"先 str() 或 os.path.join()，
-    # 再给写入模式"，而 [^)]* 会在内层右括号处断掉——实测这条规则曾对全仓真实
-    # 代码 0 命中。示例不写全（写全了这一行自己就会被命中），嵌套片段也单独拼
-    ("open", re.compile(r"open\s*\(" + _NESTED_PARENS + r"[\"']w[\"']")),
-    ("write_text", re.compile(r"\.write_text\s*\(")),
-    ("encode", re.compile(r"\.encode\s*\(\s*[\"']utf-8")),
-)
-# 每项豁免都要写清理由：这些写是工具自有产物或字节通道，不是用户源码。
-# 豁免清单不得当垃圾桶——新增一项必须能说清"为什么它不经过 source.py 也安全"
-RAW_IO_EXEMPT = {
-    "tidy.py": {
-        "open": "派生 .clang-tidy 是工具自有产物（把项目的 .clang-tidy 去掉命名"
-                "检查后写给 clang-tidy 用的临时配置），不是用户源码；内容是工具"
-                "生成的 YAML，恒定 UTF-8",
-    },
-    "cli.py": {
-        "open": "与 ci 侧同形：init 生成的是工具自有的配置产物，恒定 UTF-8",
-    },
-    "log.py": {"write_text": "阶段日志是工具自有产物，恒定 UTF-8"},
-    "platform.py": {
-        "open": "互斥锁文件里只写一个 pid，是工具自有的运行期产物，不是用户源码；"
-                "它没有原编码可言，也不必原子替换——内核的 flock 才是互斥本身",
-    },
-    "compile_db.py": {"write_text": "编译数据库是生成的 JSON 产物，恒定 UTF-8"},
-    "baseline.py": {"encode": "指纹哈希材料，不是文件写入",
-                    "write_text": "排版基线是工具自有记录，恒定 UTF-8"},
-    "report.py": {"open": "报告是工具自有旁路产物，恒定 UTF-8",
-                  "encode": "SARIF 指纹哈希材料，不是文件写入"},
-}
-
-
 # ------------------------------------------------------------------ 审计对象
 
 def default_targets(config) -> list[Path]:
-    """缺省审计对象：本包自身的实现代码 + 项目配置 + AUDIT_FILES_GLOBS。
+    """缺省审计对象：本包自身的实现代码 + 项目配置。
 
-    自身实现代码让"审计能审自己"成立；项目配置文件与 AUDIT_FILES_GLOBS 让项目
-    自己的脚本也进纪律范围。目录交给 collect_files 递归取 ``*.py``。
+    自身实现代码让"审计能审自己"成立；项目配置文件让项目自己的脚本也进纪律
+    范围。目录交给 collect_files 递归取 ``*.py``。
     """
     targets: list[Path] = []
     targets.extend(sorted(PACKAGE_DIR.rglob("*" + PY_SUFFIX), key=str))
     config_file = PACKAGE_DIR.parents[2] / CONFIG_DIR / CONFIG_NAME
     if config_file.is_file():
         targets.append(config_file)
-    root = getattr(config, "root", None)
-    if root:
-        for pattern in getattr(config, "audit_files_globs", None) or []:
-            for found in sorted(glob.glob(os.path.join(str(root), str(pattern)),
-                                          recursive=True)):
-                targets.append(Path(found))
     return targets
 
 
@@ -158,10 +107,7 @@ def config_keys(config) -> list[str]:
     运行时可用的开关，配置文件里的错字不会出现在这里。
     """
     fields = getattr(config, "__dict__", None) or {}
-    names = [
-        name for name in fields
-        if not name.startswith("_") and name not in NON_CONFIG_KEYS
-    ]
+    names = [name for name in fields if not name.startswith("_")]
     return sorted(names)
 
 
@@ -515,72 +461,6 @@ def _mentions_carrier(lines: list, carriers: list) -> bool:
     return False
 
 
-# ------------------------------------------------------------------ 检查 4
-
-def _check_raw_io(paths, messages: list) -> Code:
-    """裸写文本：绕过 source.py 直接写回文本的调用。
-
-    只扫本包自身的实现代码：项目脚本里出现的写文本多半是别人的正常代码，判红
-    只会让审计永远不绿。判定不出编码的文件会被静默写成 U+FFFD，这是不可逆的，
-    因此这里必须拦住后来人又写回裸调用。
-    """
-    code = Code.OK
-    for path in paths:
-        if not _is_tool_source(path):
-            continue
-        name = os.path.basename(str(path))
-        if name == RAW_IO_WHITELIST:
-            continue
-        exempt = RAW_IO_EXEMPT.get(name, {})
-        for number, line in enumerate(_read_lines(path), 1):
-            for rule, pattern in RAW_IO_PATTERNS:
-                if rule in exempt or not pattern.search(line):
-                    continue
-                messages.append(
-                    f"裸写文本: {path}:{number} 绕过了 source.py，"
-                    "非 UTF-8 的存量文件会被写成 U+FFFD")
-                code = Code.AUDIT_RAW_IO
-    return code
-
-
-# ------------------------------------------------------------------ 检查 5
-
-# 要拦的写法标记：字符串方法名与路径分隔符同时出现在一行。标记拆成片段拼装，
-# 而不是写成完整字面串，本模块才不会被自己这条检查命中
-PREFIX_MARK = "startswith" + "("
-# 两种分隔符写法都要拦：os.sep 是"知道有这回事"的写法，写成裸斜杠字面量的是
-# "忘了"的写法。只拦前者时后一种一样会漏（实测漏过）
-SEP_MARKS = ("os.sep", '"/"', "'/'")
-# 唯一白名单：paths.py 就是那个"唯一实现"，它当然要自己写前缀比较
-PREFIX_WHITELIST = "paths.py"
-
-
-def _check_prefix_compare(files, messages: list) -> Code:
-    """自行前缀比较：本包自身实现里另写了一遍路径包含判断。
-
-    本包只允许 paths.py 一处实现（归一化统一为 realpath）。别处图省事再拼一遍
-    前缀，就会重蹈 abspath/realpath（或 resolve）混用、同一份诊断在不同阶段
-    归因相反的覆辙。这里只拦"自身实现"代码；项目脚本不在范围。
-    """
-    code = Code.OK
-    for path in files:
-        if not _is_tool_source(path):
-            continue
-        if os.path.basename(str(path)) == PREFIX_WHITELIST:
-            continue
-        for number, line in enumerate(_read_lines(path), 1):
-            # 只看代码，不看注释：规则针对的是写法，说明里举例不该被判红
-            # （写这条检查时就被自己的注释命中过）
-            code_text = line.split("#", 1)[0]
-            if PREFIX_MARK in code_text and any(
-                    mark in code_text for mark in SEP_MARKS):
-                messages.append(
-                    f"自行前缀比较: {path}:{number} 又拼了一遍路径包含判断，"
-                    "应改用 paths.is_within")
-                code = Code.AUDIT_PREFIX_DRIFT
-    return code
-
-
 # ------------------------------------------------------------------ 入口
 
 # HeaderFilter 的形状检查用这些路径做探针：它们在任何工程里都属于"别人的头
@@ -631,8 +511,6 @@ def run(config, targets=None) -> tuple[Code, list]:
         _check_bypass(config, parsed, messages),
         _check_std(config, messages),
         _check_header_filter(config, messages),
-        _check_raw_io(files, messages),
-        _check_prefix_compare(files, messages),
     ]
     for code in codes:
         if code != Code.OK:

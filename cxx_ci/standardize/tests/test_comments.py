@@ -1,8 +1,7 @@
 """注释保护的单元测试。
 
-要守住两件事：扫描器不会被字面量里的注释符骗到（否则注释文本直接被吞进
-占位符替换，代码会损坏），以及"占位符—注释"的往返在代码没有变位时逐列还原
-（否则注释优先的基线永远不可复现）。
+要守住两件事：扫描器不会被字面量里的注释符骗到（否则注释文本直接被摘掉，
+代码会损坏），以及"摘注释—排版—按代码行回填"能原样还原注释文本与间距。
 """
 
 from __future__ import annotations
@@ -19,11 +18,11 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from cxx_standardize.comments import (
-    MARKERS,
     Comment,
-    marker_for,
+    drop_namespace_comments,
     restore_comments,
     scan_comments,
+    split,
     strip_comments,
 )
 
@@ -49,7 +48,6 @@ class TestScan:
         text = "/* 第一行\n   第二行 */int a;\n"
         found = scan_comments(text)
         assert ["/* 第一行\n   第二行 */"] == [item.text for item in found]
-        assert found[0].own_line
 
     def test_quote_inside_char_literal_is_not_a_string(self):
         """字符字面量里的双引号不能开启字符串扫描。"""
@@ -106,91 +104,66 @@ class TestScan:
         assert "   " == found[0].lead
 
 
-class TestMarker:
-    def test_prefers_the_first_free_candidate(self):
-        assert MARKERS[0] == marker_for("int a;", 0)
-
-    def test_skips_candidates_already_in_text(self):
-        text = "// " + MARKERS[0]
-        assert MARKERS[1] == marker_for(text, 0)
-
-    def test_falls_back_to_last_candidate(self):
-        text = MARKERS[0] + MARKERS[1] + MARKERS[2]
-        assert MARKERS[-1] == marker_for(text, 0)
-
-    def test_index_rotates_the_candidates(self):
-        assert MARKERS[1] == marker_for("int a;", 1)
-
-    def test_out_of_range_index_starts_from_the_first(self):
-        assert MARKERS[0] == marker_for("int a;", 99)
-        assert MARKERS[0] == marker_for("int a;", -1)
-
-
 class TestRoundTrip:
-    def test_strip_replaces_every_comment(self):
-        found = scan_comments(SOURCE)
-        stripped = strip_comments(SOURCE, marker_for(SOURCE, 0))
+    def test_strip_removes_every_comment(self):
+        stripped = strip_comments(SOURCE)
         assert "// 行尾注释" not in stripped
         assert "// 独占一行" not in stripped
-        # 占位符保持原注释种类：行注释用行占位符，块注释用块占位符。
-        # 这不是形式问题——块占位符右边可以挂代码，clang-format 会把下一行的
-        # `{` 挪上来，行注释占位符则不会（见 Comment.kind）
-        assert stripped.count("// " + MARKERS[0]) == 2
-        assert stripped.count("/*" + MARKERS[0]) == len(found) - 2
+        # 仅注释的整行被删掉，含代码的行保留
+        assert "int x = a + b;" in stripped
+        assert stripped.count("\n") == 4
 
-    def test_strip_then_restore_recovers_original_text(self):
-        """没有任何位移时，还原必须逐列回到原文。"""
-        found = scan_comments(SOURCE)
-        prefix = marker_for(SOURCE, 0)
-        stripped = strip_comments(SOURCE, prefix)
-        moved: list = []
-        restored = restore_comments(stripped, found, prefix, moved)
-        assert SOURCE == restored
-        assert [] == moved
-
-    def test_restore_is_identity_without_move(self):
-        """排版没有改动时，还原结果与输入完全一致。"""
-        found = scan_comments(SOURCE)
-        prefix = marker_for(SOURCE, 0)
-        stripped = strip_comments(SOURCE, prefix)
-        assert SOURCE == restore_comments(stripped, found, prefix)
-
-    def test_moved_is_empty_when_column_survives(self):
-        found = scan_comments(SOURCE)
-        prefix = marker_for(SOURCE, 0)
-        stripped = strip_comments(SOURCE, prefix)
-        moved: list = []
-        restore_comments(stripped, found, prefix, moved)
-        assert [] == moved
-
-    def test_moved_records_comment_pushed_off_its_column(self):
-        """代码被排长、越过原列号时，这条退让必须被记下来。"""
-        text = "int x = 1; // 行尾\n"
-        found = scan_comments(text)
-        prefix = marker_for(text, 0)
-        stripped = strip_comments(text, prefix)
-        shifted = stripped.replace("int x = 1;", "int x" + "x" * 40 + " = 1;")
-        moved: list = []
-        restored = restore_comments(shifted, found, prefix, moved)
-        assert "// 行尾" in restored
-        assert 1 == len(moved)
-        index, original, actual = moved[0]
-        assert 0 == index
-        assert original == text.index("// 行尾")
-        assert actual > original
-
-    def test_own_line_comment_keeps_its_text(self):
-        text = "void f() {\n        // 独占\n}\n"
-        found = scan_comments(text)
-        prefix = marker_for(text, 0)
-        stripped = strip_comments(text, prefix)
-        assert text == restore_comments(stripped, found, prefix)
-
-    def test_comment_inside_string_survives_strip(self):
+    def test_strip_keeps_code_inside_strings(self):
         text = 'const char *s = "/* 不是注释 */";\n'
-        found = scan_comments(text)
-        assert [] == found
-        assert text == strip_comments(text, marker_for(text, 0))
+        assert [] == scan_comments(text)
+        assert text == strip_comments(text)
+
+    def test_restore_recovers_original_without_reformat(self):
+        code, found = split(SOURCE)
+        restored, unplaced = restore_comments(code, found, code)
+        assert [] == unplaced
+        assert SOURCE == restored
+
+    def test_trailing_comment_follows_reindented_code(self):
+        """代码缩进变了，行尾注释仍挂回同一行，间距按原样。"""
+        text = "int x = 1; // 单位:毫秒\n"
+        code, found = split(text)
+        reformatted = "    int x = 1;\n"  # clang-format 改了缩进
+        restored, unplaced = restore_comments(reformatted, found, code)
+        assert [] == unplaced
+        assert "    int x = 1; // 单位:毫秒\n" == restored
+
+    def test_trailing_comment_keeps_its_column(self):
+        """代码被排短时，注释仍钉在作者原来的列号上。"""
+        text = "int   x   =   1;      // 对齐\n"
+        code, found = split(text)
+        reformatted = "int x = 1;\n"  # clang-format 把多空格压成一个，代码变短
+        restored, _ = restore_comments(reformatted, found, code)
+        assert restored.index("// 对齐") == text.index("// 对齐")
+
+    def test_trailing_comment_steps_aside_when_code_overlaps(self):
+        """代码排长越过原列号时，注释右移一个空格让开。"""
+        text = "int x = 1; // 单位\n"
+        code, found = split(text)
+        reformatted = "int " + "x" * 40 + " = 1;\n"
+        restored, _ = restore_comments(reformatted, found, code)
+        assert restored == reformatted.rstrip() + " // 单位\n"
+
+    def test_own_line_comment_inserted_before_its_code(self):
+        text = "void f() {\n    // 独占\n    g();\n}\n"
+        code, found = split(text)
+        assert "// 独占" not in code
+        restored, unplaced = restore_comments(code, found, code)
+        assert [] == unplaced
+        assert text == restored
+
+    def test_short_anchor_matches_whole_line_not_substring(self):
+        """`}` 不能被当成子串匹配到 `};` 上，注释要落在正确的那一行。"""
+        text = "struct S {};\nint f() {\n  return 1;\n} // 收尾\n"
+        code, found = split(text)
+        restored, unplaced = restore_comments(code, found, code)
+        assert [] == unplaced
+        assert text == restored
 
 
 class TestComment:
@@ -199,6 +172,14 @@ class TestComment:
         assert Comment("// x", "  ", False, 4) == item
         with pytest.raises(FrozenInstanceError):
             item.text = "// y"  # type: ignore[misc]
+
+
+def test_clang_format_namespace_comment_is_dropped():
+    """clang-format 会给命名空间收尾 `}` 补注释，回填前要去掉。"""
+    assert "}\n" == drop_namespace_comments("} // namespace mvc\n")
+    assert "}\n" == drop_namespace_comments("} // namespace\n")
+    # 不是收尾 `}` 的注释不动
+    assert "x(); // namespace\n" == drop_namespace_comments("x(); // namespace\n")
 
 
 def test_digit_separator_is_not_a_char_literal():

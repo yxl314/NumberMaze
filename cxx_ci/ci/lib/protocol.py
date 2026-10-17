@@ -34,7 +34,7 @@ Known = collections.namedtuple("Known", "case reason")
 
 _DIAG = re.compile(r"^#diag\s+(?P<level>\w+)\s*:\s*(?P<rest>.*)$")
 _LOCATION = re.compile(
-    r"^(?P<file>[^:]+):(?P<line>\d+):(?:(?P<column>\d+):)?\s*(?P<message>.*)$")
+    r"^(?P<file>.+?):(?P<line>\d+):(?:(?P<column>\d+):)?\s*(?P<message>.*)$")
 _FAIL = re.compile(r"^#fail\s*:\s*(?P<case>\S*)\s*(?P<reason>.*)$")
 _SUM = re.compile(r"^#sum\s*:\s*(?P<text>.*)$")
 _XFAIL = re.compile(r"^#xfail\s*:\s*(?P<case>\S*)\s*(?P<reason>.*)$")
@@ -46,9 +46,40 @@ def diag(level, path, line, column, message):
                                         message)
 
 
+def escape_case(case):
+    """把用例名里的空白与反斜杠转义，好让它能挤进一个字段。
+
+    协议行是 `#fail: <case> <reason>`：case 到第一个空白为止。用例名里本来
+    含空格时（"空格 用例"）会被截成第一个词，报告与终端于是显示一个不存在的
+    名字。转义之后能原样往返，而本来不带空白的名字一个字节都不变。
+    """
+    text = str(case if case is not None else "")
+    return (text.replace("\\", "\\\\").replace(" ", "\\s")
+            .replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r"))
+
+
+def unescape_case(case):
+    """escape_case 的逆运算。"""
+    text = str(case if case is not None else "")
+    if "\\" not in text:
+        return text
+    out = []
+    index = 0
+    mapping = {"s": " ", "t": "\t", "n": "\n", "r": "\r", "\\": "\\"}
+    while index < len(text):
+        char = text[index]
+        if char == "\\" and index + 1 < len(text) and text[index + 1] in mapping:
+            out.append(mapping[text[index + 1]])
+            index += 2
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
 def fail(case, reason):
     """生成一条失败用例协议行。"""
-    return "{}: {} {}".format(FAIL, case, reason).rstrip()
+    return "{}: {} {}".format(FAIL, escape_case(case), reason).rstrip()
 
 
 def summary(text):
@@ -62,7 +93,7 @@ def known(case, reason):
     与 `#fail` 同形但语义相反：它既不是失败也不是通过。报告拿它给条目打
     "已知"标记，平台面板于是能把它显示成"已知"而不是"失败"。
     """
-    return "{}: {} {}".format(XFAIL, case, reason).rstrip()
+    return "{}: {} {}".format(XFAIL, escape_case(case), reason).rstrip()
 
 
 def parse_diag(line):
@@ -86,7 +117,7 @@ def parse_fail(line):
     match = _FAIL.match(line.strip())
     if not match:
         return None
-    return Fail(match.group("case"), match.group("reason"))
+    return Fail(unescape_case(match.group("case")), match.group("reason"))
 
 
 def parse_known(line):
@@ -94,7 +125,7 @@ def parse_known(line):
     match = _XFAIL.match(line.strip())
     if not match:
         return None
-    return Known(match.group("case") or "", match.group("reason").strip())
+    return Known(unescape_case(match.group("case")) or "", match.group("reason").strip())
 
 
 def parse_sum(line):

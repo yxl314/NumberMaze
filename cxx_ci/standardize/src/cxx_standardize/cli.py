@@ -6,7 +6,6 @@
     cxx-standardize style [--apply]       # 只做风格
     cxx-standardize format [--apply]      # 只做排版
     cxx-standardize format --accept-baseline --yes   # 一次性切换
-    cxx-standardize init [--project-root PATH] [--out PATH]   # 探测生成配置
 
 退出码（见 CONTRACT.md）：0 无需改动；1 有待改动或检查未通过；2 工具或配置错误。
 """
@@ -17,10 +16,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import fmt, log, probe
+from . import fmt, guards, log
 from .version import version_line
 from . import audit as audit_mod
-from . import naming_meta, platform
+from . import platform
 from . import config as config_module
 from . import format as format_mod
 from . import report as report_module
@@ -38,9 +37,6 @@ ACTIONS = ("style", "format")
 # AlignConsecutive* 的列对齐要重排
 ALL_ACTIONS = ("style", "format")
 
-# init 生成的配置在工程里的位置（相对项目根）
-INIT_OUTPUT = "config/standardize.py"
-
 
 @dataclass
 class Request:
@@ -55,8 +51,7 @@ class Request:
 # 顶层动作的权威清单：parser 的 choices 与 standardize.py 包装脚本都从这里取。
 # 两处各写一个元组就会漏——doctor 加进来时包装脚本不知道，于是把 "doctor"
 # 当成"没给动作"，插了个 all 变成 "all doctor"，报的却是 unrecognized arguments
-KNOWN_ACTIONS = ("check", "style", "format", "all", "init", "doctor",
-                 "migrate-config")
+KNOWN_ACTIONS = ("check", "style", "format", "all", "guard", "doctor")
 
 
 def build_parser():
@@ -70,18 +65,12 @@ def build_parser():
         nargs="?",
         choices=KNOWN_ACTIONS,
         help="check 跑风格与排版；style / format 只跑其中一个；"
-             "init 探测当前工程并生成配置；doctor 只读自检；"
-             "migrate-config 把旧配置项改名",
+             "guard 检查宏守卫与 detail:: 归属；doctor 只读自检",
     )
-    parser.add_argument("--project-root", default="",
-                        help="init 探测的工程根，缺省取当前目录")
-    parser.add_argument("--out", default="",
-                        help="init 生成配置的位置，缺省 <工程>/config/standardize.py")
+    parser.add_argument("--fix", action="store_true",
+                        help="guard 时补/改头文件宏守卫")
     parser.add_argument("--record", action="store_true",
                         help="把当前未登记的诊断登记成基线，只对新增违规判红")
-    parser.add_argument("--apply-naming", action="store_true",
-                        help="扩大 --apply 的范围：把命名也纳入自动修复"
-                             "（需与 --apply 同用；all --apply 默认包含）")
     parser.add_argument("--apply", action="store_true",
                         help="写入改动，缺省仅预览")
     parser.add_argument("--accept-baseline", action="store_true",
@@ -121,13 +110,8 @@ def build_parser():
     parser.add_argument(
         "--report-format",
         default="json",
-        help="报告格式 json|junit|sarif，逗号分隔可并列（多格式写文件时按格式加后缀）",
+        help="报告格式，目前只有 json",
     )
-    parser.add_argument("--migrate-config", dest="migrate_config",
-                        action="store_true",
-                        help="把旧配置项改名（配 --config 指目标；加 --dry-run 只出 diff）")
-    parser.add_argument("--dry-run", dest="dry_run", action="store_true",
-                        help="只打印将要做的改动，不写文件")
     parser.add_argument("--version", action="store_true", help="打印版本与环境后退出")
     return parser
 
@@ -146,7 +130,8 @@ def to_request(args):
         base=args.base,
         full=args.full,
         apply=args.apply,
-        apply_naming=args.apply_naming,
+        apply_naming=False,
+        fix=args.fix,
         record=args.record,
         no_prepare=args.no_prepare,
         jobs=args.jobs,
@@ -230,14 +215,8 @@ def run_request(config, request, report=None):
     if request.yes and not request.accept_baseline:
         log.err("--yes 只用于 --accept-baseline 的二次确认")
         return Code.CONFIG_BAD_VALUE
-    if request.options.apply_naming and not request.options.apply:
-        # 命名只是 --apply 的范围开关。单用它是空操作——实测使用者会把它读成
-        # "命名改不动"，进而怀疑整个命名功能。无意义的开关组合必须出声，
-        # 与上面两条同一条纪律
-        log.err("--apply-naming 只是 --apply 的范围开关，必须与 --apply 同用；"
-                "想连命名一起自动改：`style --apply --apply-naming`，"
-                "或 `all --apply`（默认包含命名）")
-        return Code.CONFIG_BAD_VALUE
+    if request.action == "guard":
+        return guards.run(config, fix=request.options.fix)
 
     tools, code, message = resolve_tools(config, needed_tools(request))
     if code != Code.OK:
@@ -254,8 +233,8 @@ def run_request(config, request, report=None):
         log.truncate_log(config, name)
         started = time.monotonic()
         if name == "style":
-            if request.action == "all" and request.options.apply:
-                # all --apply 的语义就是"三件事一次做完"，命名不再要求额外开关
+            if request.options.apply:
+                # --apply 的语义包含命名：改完风格顺带把命名也规范了
                 request.options.apply_naming = True
             if request.options.record:
                 code = style_mod.record(config, request.options, tools, report)
@@ -278,11 +257,14 @@ def run_request(config, request, report=None):
     return first
 
 
-def publish_report(config, args, collector):
+def publish_report(config, args, collector, code=None, detail=""):
     """写机器可读报告。
 
     报告是旁路产物：它的结论与终端同源（同一份收集器），写报告自身失败（目录
     不可写、格式非法）只降级为警告，绝不改变门禁结论与退出码。
+
+    整体结论（code/detail）由入口给：报告不自己判卷，但必须把入口的判定带出去。
+    少了它，"一段都没跑就失败"在平台眼里是 tests=0 failures=0——零失败。
     """
     target = getattr(args, "report", None)
     if not target:
@@ -295,7 +277,9 @@ def publish_report(config, args, collector):
                 + "（可用: " + "、".join(report_module.FORMATS) + "）")
         return
     try:
-        document = report_module.build(config, collector)
+        document = report_module.build(
+            config, collector,
+            conclusion=report_module.conclusion_of(code, detail))
         written, problems = report_module.write(document, target, formats)
     except (OSError, ValueError, TypeError) as exc:
         log.err("生成报告失败（不影响判定）: {}".format(exc))
@@ -305,38 +289,6 @@ def publish_report(config, args, collector):
     for path in written:
         if path != "<stdout>":
             log.out("报告已写入: " + path)
-
-
-def init_command(args):
-    """探测工程并生成配置，返回错误码。
-
-    init 与 --version 一样要在加载配置之前短路：它正是用来产生配置的，因此
-    不接受 --config，也不依赖任何已有配置。
-    """
-    root = Path(args.project_root).resolve() if args.project_root else Path.cwd()
-    if not root.is_dir():
-        log.err("项目根不存在: {}".format(root))
-        return Code.CONFIG_ROOT_MISSING
-    target = Path(args.out) if args.out else root / INIT_OUTPUT
-    if not target.is_absolute():
-        target = root / target
-    if target.exists():
-        log.err("目标已存在，不覆盖: {}（先备份或换个 --out）".format(target))
-        return Code.CONFIG_BAD_VALUE
-    created, template_errors = probe.ensure_config_files(root)
-    if template_errors:
-        for line in template_errors:
-            log.err("写入 clang 配置模板失败: " + line)
-        return Code.CONFIG_BAD_VALUE
-    plan = probe.probe(root, created)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    code, message = probe.write_config(target, probe.render(plan))
-    if code:
-        log.err(message)
-        return Code.CONFIG_BAD_VALUE
-    for line in probe.summary(plan, target, created):
-        log.out(line)
-    return Code.OK
 
 
 def doctor_command(args):
@@ -362,19 +314,6 @@ def doctor_command(args):
     return int(exit_code(Code.OK))
 
 
-def migrate_command(args):
-    """migrate-config：与 ci 侧同形状（`--config` 指目标，`--dry-run` 预演）。"""
-    from . import migrate
-
-    target = str(args.config or "")
-    if not target or not Path(target).is_file():
-        log.err("找不到配置文件: " + (target or "（未指定 --config）"))
-        return 2
-    code, text = migrate.migrate(target, dry_run=bool(args.dry_run))
-    log.out(text)
-    return code
-
-
 def main(argv=None):
     log.ensure_utf8_streams()
     # 平台守卫：与 ci.py 同一判据。排版与风格在 macOS/BSD 可用（limited 时放行），
@@ -384,22 +323,13 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     if "doctor" == getattr(args, "action", ""):
         return doctor_command(args)
-    # 子命令形状与 ci 侧一致（`cxx-standardize migrate-config`）；--migrate-config
-    # 保留为等价别名，老脚本不至于失效
-    if "migrate-config" == getattr(args, "action", "") or \
-            getattr(args, "migrate_config", False):
-        return migrate_command(args)
     if args.version:
         # 统一形状，与 ci.py --version 一致：<项目> <版本> contract <N> python >=<下限>
         log.out(version_line())
         return int(exit_code(Code.OK))
-    # init 在配置加载之前：它正是用来产生配置的
-    if args.action == "init":
-        return int(exit_code(init_command(args)))
     if not args.action:
         build_parser().error(
-            "必须给出动作: all / check / style / format / init（all 一次跑完"
-            "排版、风格与命名）")
+            "必须给出动作: all / check / style / format（all 一次跑完排版、风格与命名）")
     if args.verbose:
         log.set_verbose(True)
 
@@ -407,11 +337,9 @@ def main(argv=None):
     if config is None:
         log.err(message)
         return int(exit_code(code))
-    for note in getattr(config, "notes", None) or ():
-        log.err(note)
     # 互斥：两份工具同时跑同一个工程会互相破坏——一份清构建树时另一份正在用它，
-    # 阶段日志与报告也会被交替写成混合文件。init/doctor 这类只读入口不占锁
-    holder, why = platform.acquire_lock(getattr(config, "log_dir", ""))
+    # 阶段日志与报告也会被交替写成混合文件。doctor 这类只读入口不占锁
+    holder, why = platform.acquire_lock(getattr(config, "build_dir", ""))
     if holder is None and why:
         log.err(why)
         return int(exit_code(Code.ENV_BUSY))
@@ -431,20 +359,12 @@ def _run_locked(config, args, code):
             if code != Code.OK:
                 for line in messages:
                     log.err(line)
-                publish_report(config, args, collector)
+                publish_report(config, args, collector, exit_code(code),
+                               "配置审计失败：" + (messages[0] if messages else ""))
                 return int(exit_code(code))
-        # 命名口径元检查：毫秒级，放在调 clang 之前。口径被悄悄削弱（例如把 s_ 改回
-        # g_）时，clang-tidy 会"合规地绿"，只有这一层拦得住
-        code, messages = naming_meta.check(config)
-        if code != Code.OK:
-            for line in messages:
-                log.err(line)
-            log.err("命名口径与配置不一致；口径表 NAMING_* 是唯一事实源，"
-                    "请改口径表或修正 .clang-tidy")
-            publish_report(config, args, collector)
-            return int(exit_code(code))
         code = run_request(config, to_request(args), collector)
-        publish_report(config, args, collector)
+        publish_report(config, args, collector, exit_code(code),
+                       "运行完成" if code == Code.OK else "运行未通过")
         return int(exit_code(code))
 
 

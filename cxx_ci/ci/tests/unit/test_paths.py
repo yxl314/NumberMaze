@@ -145,7 +145,7 @@ class TestAgreement:
 class TestSymlinkLayoutsAgreeEverywhere:
     """三种软链布局，四个消费点必须给出同一结论。
 
-    四个消费点走的是同一条链：`clean` / `boundary` / `valgrind` 用 is_within，
+    四个消费点走的是同一条链：`clean` / `stages` / `valgrind` 用 is_within，
     `diagnostics` / `style` / `memcheck` 归因用 scope_of（它内部也委托
     is_within）。收口之前它们一个用 realpath、一个用 abspath，同一个文件会被
     判成"在构建树外"和"在项目内"两种相反结论——而每一处单独看都"对"。
@@ -160,7 +160,7 @@ class TestSymlinkLayoutsAgreeEverywhere:
         abspath，同一路径会被判成相反结论。
         """
         scope = paths.scope_of(target, project_roots, excluded_roots)
-        # clean / boundary 的越界保护
+        # clean / 阶段脚本的越界保护
         clean = any(paths.is_within(target, root) for root in project_roots)
         # diagnostics 的归属判定
         _resolved, owned = diagnostics.resolve_source(

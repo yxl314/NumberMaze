@@ -18,30 +18,26 @@ cxx-standardize --version
 给出——装成包之后工具目录里没有 `config/`。
 
 依赖清单在仓库根的 [requirements/](../requirements/) 下（与 `pyproject.toml`
-同源生成，勿手改）：运行依赖 `standardize.txt`，钉 clang 版本再用
-`standardize-clang17.txt`。系统 clang（17 及以上）这样装：
+同源生成，勿手改）：运行、可选 pip clang 与开发依赖都在 `standardize.txt`。
+系统 clang（17 及以上）这样装：
 
 ```bash
 sudo apt-get install clang-format-17 clang-tidy-17 clang-tools-17
 ```
 
-## 接入一个新工程：三条命令
+## 接入一个新工程：两条命令
 
 ```sh
-python3 cxx_ci/standardize/standardize.py init --project-root <工程根>
 python3 cxx_ci/standardize/standardize.py --config config/standardize.py doctor
 python3 cxx_ci/standardize/standardize.py --config config/standardize.py --apply
 ```
 
-* **`init`**：检查 `.clang-format` / `.clang-tidy` 是否存在（缺了给最小模板，并
-  说明"配置不存在会被直接拒绝、不退成逐级向上查找"这条规则）；探测 `CLANG_MAJOR`；
-  按工程 include 形状产出 `TIDY_HEADER_FILTER` 建议；识别 vendored 目录填 `FROZEN`。
+* **配置**：照 `config/config.py.example` 抄一份到工程根，按注释改。每项的含义、
+  推导规则与改动时机都写在那里。
 * **`doctor`**：四段与 ci 侧同形——环境（含平台级别与判据、`CLANG_PREFER` 生效
   值、依赖清单校验）、生效配置（每项标来源）、上次结论、下一步。
-* **`migrate-config`**：旧配置项一次性改名（`--dry-run` 只看 diff），与 ci 侧同形。
-* **配置说明**：每项的含义、推导规则与改动时机写在 `config/config.py.example`
-  的分节注释里——照抄它改，不要从零写。
-* 一次修完排版 + 风格 + 命名就用 `--apply`（缺省动作是 `all`，已包含命名）。
+* 一次修完排版 + 风格 + 命名就用 `--apply`（缺省动作是 `all`，已包含命名；
+  命名改名也在此一步，位置取自 clang-tidy、目标名按 `NAMING_PREFIX` 口径表算）。
 
 ## 支持面
 
@@ -52,6 +48,8 @@ GNU/Linux 全部能力；macOS / BSD 可以跑排版与风格（内存检查是 
 
 ```bash
 cxx-standardize check                  # 风格 + 排版门禁（预览，不改文件）
+cxx-standardize guard                  # 检查宏守卫与 detail:: 归属
+cxx-standardize guard --fix            # 补齐或改正头文件宏守卫
 cxx-standardize style                  # 只做风格
 cxx-standardize format                 # 只做排版
 cxx-standardize style --apply          # 写入风格修复
@@ -87,14 +85,16 @@ cxx-standardize check --config <路径>  # 指定项目配置
 | `BUILD_TOOL` / `BUILD_FILE` / `BUILD_DIR` | 构建工具与主构建目录 |
 | `TEST_BUILD_FILE` / `TEST_BUILD_DIR` | 测试构建文件与目录 |
 | `CXX_COMPILER` / `CXX_STANDARD` | 编译器与语言标准 |
-| `CLANG_FORMAT_CONFIG` / `CLANG_TIDY_CONFIG` | 两个配置文件的位置，**必须真实存在** |
+| `CLANG_FORMAT_CONFIG` / `CLANG_TIDY_CONFIG` | 两个配置文件的位置，**必须真实存在**。现成的全量示例见 `examples/clang-config/` |
 | `CLANG_MAJOR` | 钉定 clang 主版本；多版本共存时结果随版本变化 |
 | `CLANG_TIDY_EXTRA_ARGS` | 额外编译参数，用于屏蔽第三方头文件的已知误报 |
-| `FORMAT_COMMENTS` | 注释保护模式：`protect-column`（推荐）/ `placeholder` / `none` |
+| `FORMAT_COMMENTS` | 注释保护模式：`protect`（推荐）/ `none`（旧名 `protect-column`/`placeholder` 等价于 `protect`） |
 | `TIDY_PREPARE` | 分析前先生成 moc_/ui_/qrc_ 等派生文件 |
 | `VERIFY_COMMAND` | 应用风格修复后验证构建的指令；留空则跳过验证（会明确提示） |
 | `INCREMENTAL` / `INCREMENTAL_INCLUDES` | 只处理改动集；改动的头文件带出包含它的翻译单元（用编译器自己的 `-MM`，间接包含也算；只对风格检查有意义） |
 | `FROZEN` | 禁改区：`--apply` 绝不可写的路径（vendored 冻结库）。与 `BLACKLIST` 分列——黑名单是"不必分析"，这里是"绝不可写" |
+| `BOUNDARY_DIRS` / `GUARD_EXTS` | 受管源目录与需要检查宏守卫的头文件后缀 |
+| `DETAIL_DIRS` / `DETAIL_MARK` | 允许出现 `detail::` 的目录与标记写法 |
 | `TIDY_HEADER_FILTER` | 强制注入的 header-filter；命令行优先于项目 `.clang-tidy` |
 | `XFAIL_FILE` / `XFAIL_STRICT` | 风格侧登记清单的位置与严格模式 |
 | `CI_LOG_DIR` / `JOBS` | 日志目录（缺省 `BUILD_DIR/ci-logs`）与并行度 |
@@ -197,7 +197,7 @@ Source/CDBurn/Util.cpp:120:bugprone-branch-clone   # 待重构
 与 `ci` 侧同构的三条只读检查，在配置加载成功后、任何动作之前跑：死配置（配置键
 从没有以 `config.键` 的形式取过值）、配置旁路（源码里的字符串常量与某个配置取值
 完全相等，docstring 不算）、编译标准锁定（`CMAKE_CXX_STANDARD` 与别处的 `-std=`）。
-被审对象是本包自身 + `AUDIT_FILES_GLOBS` 列出的项目文件。`--no-audit` 可跳过。
+被审对象是本包自身与项目配置。`--no-audit` 可跳过。
 
 ## 禁改区写保护
 
@@ -206,15 +206,8 @@ Source/CDBurn/Util.cpp:120:bugprone-branch-clone   # 待重构
 处理范围之外——一个把冻结库头文件带进诊断的 TU，就能让自动修复把改名或排版直接
 写进那份不该动的库。
 
-三道防线（都只在 `--apply` 上）：
-
-1. **写前查落点**：替换块报出的每个落点（`DiagnosticMessage.Replacements[].FilePath`，
-   不是命令行目标）落在 `FROZEN` 或 `BLACKLIST` 里 → 整体拒绝，指名文件与命中哪张表；
-2. **写前快照**：`FROZEN` 与 `BLACKLIST` 下源码文件的字节快照（不是 mtime：粗粒度
-   文件系统上同秒内的写入看不出来，而且发现被写之后要能原样还回去）；
-3. **写后比对**：每应用一个文件就比对一次，内容变了 → 整体回退（含把越界写入的文件
-   按快照还原）并返回 `FROZEN_TOUCHED`。
-
+**写前查落点**：替换块报出的每个落点（`DiagnosticMessage.Replacements[].FilePath`，
+不是命令行目标）落在 `FROZEN` 或 `BLACKLIST` 里 → 整体拒绝，指名文件与命中哪张表。
 黑名单与禁改区分列是为了语义清楚（一个宽容、一个红线），但"fix-it 落到没让你管的
 地方"是同一类越界写入，因此保护范围一致。
 
@@ -228,9 +221,8 @@ Source/CDBurn/Util.cpp:120:bugprone-branch-clone   # 待重构
 
 ## 应用修复与构建验证
 
-改名类修复可能只改声明处而让别的文件编译不过，因此 `--apply` 逐文件修复，每改
-一个文件就跑一次 `VERIFY_COMMAND`：通过则保留，失败则**整体回到最近一次通过的
-状态**并把该文件列入"需人工处理"。
+改名类修复可能只改声明处而让别的文件编译不过，因此 `--apply` 先整体应用全部
+修复，再跑一次 `VERIFY_COMMAND`：通过则保留，失败则**整体回到改前状态**。
 
 `VERIFY_COMMAND` 留空时跳过验证（会明确提示）。想复用门禁项目的构建，可以写：
 
@@ -263,6 +255,12 @@ standardize/
 ├── config/config.py.example
 ├── tests/
 └── README.md
+
+examples/clang-config/          写全了排版与命名规则的现成配置
+├── .clang-format               排版规范（可 clang-format --style=file 直接跑）
+├── .clang-tidy                 检查开关 + 命名规则
+├── naming-tables.py            配套的命名口径表（粘进 config/standardize.py）
+└── README.md                   怎么落地、哪里要按工程改
 ```
 
 ## 测试与自检

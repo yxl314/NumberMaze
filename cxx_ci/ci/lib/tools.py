@@ -89,11 +89,14 @@ def run_with_diagnostics(cmd, cwd=None, env=None):
     编译器告警的版式是固定的（路径:行:列: 级别: 消息），生成侧解析后发
     #diag，驱动层就不必对全文跑正则。返回退出码。
     """
-    out("$ " + " ".join(str(part) for part in cmd))
+    err("$ " + " ".join(str(part) for part in cmd))
     code, captured, _ = capture(cmd, cwd=cwd, merge=True, env=env)
     text = decode(captured)
     if text.strip():
-        out(text.rstrip())
+        # 原始输出走 stderr：stdout 是协议通道，只放本工具生成的协议行。
+        # 混在一起时，工具输出里任何一行以 #fail: 开头都会被驱动采信——
+        # 一个名字里带换行的文件就能凭空造出一条"逐例失败"
+        err(text.rstrip())
     for item in collect_diagnostics(text):
         out(protocol.diag(item.level, item.file, item.line, item.column,
                           item.message))

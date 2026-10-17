@@ -31,8 +31,9 @@ CONFIG_ENV = "CXX_STANDARDIZE_CONFIG"
 # 逼移植者填一个永远不生效的配置——配置审计的死配置检查会当场把它抓出来
 REQUIRED = ("ROOT", "CLANG_FORMAT_CONFIG", "CLANG_TIDY_CONFIG")
 
-# 注释保护模式。none 完全信任 .clang-format；另两种先把注释换成占位符
-COMMENT_MODES = ("protect-column", "placeholder", "none")
+# 注释保护模式。none 完全信任 .clang-format；其余（含旧名 protect-column /
+# placeholder）都先摘掉注释排代码、再按代码行回填
+COMMENT_MODES = ("protect", "protect-column", "placeholder", "none")
 
 # 编译数据库 provider 名
 
@@ -50,7 +51,7 @@ DEFAULTS: dict[str, object] = {
     "WHITELIST": [],
     "BLACKLIST": [],
     "SCOPE": {},
-    "FORMAT_COMMENTS": "placeholder",
+    "FORMAT_COMMENTS": "protect",
     "TIDY_PREPARE": True,
     "INCREMENTAL": False,
     "INCREMENTAL_INCLUDES": True,
@@ -70,13 +71,13 @@ DEFAULTS: dict[str, object] = {
     "FROZEN": [],
     # 强制注入的 header-filter：命令行优先于项目 .clang-tidy，防它被改宽或改窄
     "TIDY_HEADER_FILTER": "",
+    # 代码守卫：受管源目录、detail:: 归属与头文件宏守卫的判据
+    "BOUNDARY_DIRS": [],
+    "DETAIL_DIRS": [],
+    "DETAIL_MARK": "detail::",
+    "GUARD_EXTS": [".h", ".hh", ".hpp", ".hxx"],
     "NAMING_PREFIX": {},
-    "NAMING_LOCAL_BAN": "gmstv",
-    "NAMING_EXEMPT_KEYS": [],
-    "NAMING_PREMISE_TRUE": [],
     "NAMING_FIX_PREFIX_SWAPS": [],
-    # 配置审计：除本包自身外还要审的项目文件
-    "AUDIT_FILES_GLOBS": [],
 }
 
 
@@ -96,7 +97,7 @@ class Config:
     blacklist: list[Path] = field(default_factory=list)
     scope_roots: list[Path] = field(default_factory=list)
     scope_excluded: list[Path] = field(default_factory=list)
-    format_comments: str = "placeholder"
+    format_comments: str = "protect"
     tidy_prepare: bool = True
     incremental: bool = False
     incremental_includes: bool = True
@@ -123,15 +124,15 @@ class Config:
     source_encoding_candidates: list[str] = field(default_factory=list)
     frozen: list[Path] = field(default_factory=list)
     tidy_header_filter: str = ""
-    # 命名口径：kind → 前缀。改口径只改这张表，元检查据此现场推导 .clang-tidy
-    # 应为何，偏离即红
+    # 代码守卫：受管源目录、detail:: 归属与头文件宏守卫的判据
+    boundary_dirs: list[Path] = field(default_factory=list)
+    detail_dirs: list[Path] = field(default_factory=list)
+    detail_mark: str = "detail::"
+    guard_exts: list[str] = field(default_factory=list)
+    # 命名口径：kind → 前缀。改名时按这张表算目标名
     naming_prefix: dict = field(default_factory=dict)
-    naming_local_ban: str = "gmstv"
-    naming_exempt_keys: list = field(default_factory=list)
-    naming_premise_true: list = field(default_factory=list)
     # 前缀中间态交换表，形如 (("t_m_", "t_"),)；默认空 = 不做任何交换
     naming_fix_prefix_swaps: list = field(default_factory=list)
-    audit_files_globs: list[str] = field(default_factory=list)
     # 显式写在配置文件里的键名。用于区分"用户配了 SOURCE_ENCODING"与"它只是
     # 回落到了缺省值"——两者的提示语与 doc 含义不同。
     declared_keys: frozenset = field(default_factory=frozenset)
@@ -158,7 +159,6 @@ class Reader:
         self.path = path
         self.code = Code.OK
         self.message = ""
-        self.notes = []
 
     def has(self, name):
         return hasattr(self.module, name)
@@ -173,10 +173,6 @@ class Reader:
         if self.code == Code.OK:
             self.code = code
             self.message = message
-
-    def note(self, text):
-        """非致命的提示，随配置返回由入口打印一次。"""
-        self.notes.append(text)
 
 
 def _load_module(path):
@@ -438,21 +434,6 @@ def _count(reader, name):
     return value
 
 
-def _build_file(reader, name, tool):
-    """构建文件必须是绝对路径，且文件名要与构建工具匹配。"""
-    path = _absolute(reader, name, required=True)
-    if path is None:
-        return None
-    if tool == "cmake":
-        matched, expected = path.name == "CMakeLists.txt", "CMakeLists.txt"
-    else:
-        matched, expected = path.name.endswith(".pro"), ".pro 文件"
-    if not matched:
-        reader.fail(Code.CONFIG_BAD_VALUE,
-                    f"{name} 与 BUILD_TOOL={tool} 不匹配，应为 {expected}")
-    return path
-
-
 def check_contract(module):
     """比对配置声明的契约版本与本工具实现，返回 (错误码, 说明)。
 
@@ -461,7 +442,18 @@ def check_contract(module):
     猜怎么兼容，不如当场拒绝并让人对齐到同一份 CONTRACT.md。
     """
     declared = getattr(module, "CONTRACT_VERSION", None)
-    if not isinstance(declared, int) or isinstance(declared, bool):
+    if isinstance(declared, bool):
+        return Code.CONTRACT_MISMATCH, (
+            "CONTRACT_VERSION 写成了布尔值（{!r}）；请写整数，当前契约是 {}"
+            .format(declared, CONTRACT_VERSION))
+    if isinstance(declared, float) or (
+            isinstance(declared, str) and declared.strip()):
+        # 写成 2.0 或 "2" 时以前被当成"没写"静默放行，而契约写的是"一旦写了就
+        # 必须与本工具实现一致"：配置与工具取自不同代却一路跑到底
+        return Code.CONTRACT_MISMATCH, (
+            "CONTRACT_VERSION 写成了 {}（{!r}）；请写整数，当前契约是 {}"
+            .format(type(declared).__name__, declared, CONTRACT_VERSION))
+    if not isinstance(declared, int):
         return Code.OK, ""
     if declared == CONTRACT_VERSION:
         return Code.OK, ""
@@ -527,12 +519,12 @@ def load_config(path=None):
         frozen=_path_list(reader, "FROZEN"),
         tidy_header_filter=_text_value(reader, "TIDY_HEADER_FILTER"),
         naming_prefix=_mapping(reader, "NAMING_PREFIX"),
-        naming_local_ban=_encoding(reader, "NAMING_LOCAL_BAN", "gmstv"),
-        naming_exempt_keys=_string_list(reader, "NAMING_EXEMPT_KEYS"),
-        naming_premise_true=_string_list(reader, "NAMING_PREMISE_TRUE"),
+        boundary_dirs=_path_list(reader, "BOUNDARY_DIRS"),
+        detail_dirs=_path_list(reader, "DETAIL_DIRS"),
+        detail_mark=_text_value(reader, "DETAIL_MARK"),
+        guard_exts=_string_list(reader, "GUARD_EXTS"),
         naming_fix_prefix_swaps=_pair_list(reader,
                                            "NAMING_FIX_PREFIX_SWAPS"),
-        audit_files_globs=_text_list(reader, "AUDIT_FILES_GLOBS"),
         declared_keys=frozenset(vars(module)),
     )
     config.scope_roots, config.scope_excluded = _scope(reader, config)
@@ -544,14 +536,48 @@ def load_config(path=None):
         config.log_dir = config.build_dir / "ci-logs"
     if config.xfail_file is None:
         config.xfail_file = config.root / "standardize.xfail"
-    # 非致命提示随配置带出去，由入口打印一次：note() 以前只有写入端，没有读取端，
-    # 加进去的话会被静默丢掉
-    config.notes = list(reader.notes)
     # 失败检查放在**所有**读取之后：放在中间时，它后面的校验（作用域那几项就是）
     # 记下的失败没人再看，配置写错却一路跑到缺省值上
     if reader.code != Code.OK:
         return None, reader.code, reader.message
     return config, Code.OK, ""
+
+
+def _path_items(reader, name, value, must_be_absolute=True, hint=""):
+    """一组路径：逐项要求是路径，并且（缺省）必须是绝对路径。
+
+    "列表里放路径"的项共用一份判定：各写一遍的后果是其中一处漏掉校验，而漏掉的
+    那处就静默接受相对路径——判定随运行目录漂移，谁也不看得出来。
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        # 单条命令字符串不是 argv 列表：拿去执行时它会变成一个整体（找不到
+        # 叫 "make -j4" 的程序），而写成路径时更会被逐字符拆开
+        reader.fail(Code.CONFIG_BAD_VALUE,
+                    "{} 必须是**一个列表**{}；直接写一个字符串会被当成逐项"
+                    "可迭代物".format(name, hint))
+        return []
+    if not isinstance(value, (list, tuple)):
+        reader.fail(Code.CONFIG_BAD_VALUE,
+                    "{} 必须是列表，实际是 {}{}".format(
+                        name, type(value).__name__, hint))
+        return []
+    found = []
+    for index, item in enumerate(value):
+        path = _as_path(item)
+        if path is None:
+            reader.fail(Code.CONFIG_BAD_VALUE,
+                        "{} 第 {} 项必须是字符串或路径，实际是 {}"
+                        .format(name, index + 1, type(item).__name__))
+            continue
+        if must_be_absolute and not path.is_absolute():
+            reader.fail(Code.CONFIG_BAD_VALUE,
+                        '{} 第 {} 项必须是绝对路径，请写成 ROOT / "{}"'
+                        .format(name, index + 1, item))
+            continue
+        found.append(path)
+    return found
 
 
 def _scope(reader, config):
@@ -564,8 +590,11 @@ def _scope(reader, config):
     if not isinstance(raw, dict):
         reader.fail(Code.CONFIG_BAD_VALUE, "SCOPE 必须是字典")
         return [config.root], [config.build_dir]
-    roots = [Path(item) for item in raw.get("project") or []]
-    excluded = [Path(item) for item in raw.get("excluded") or []]
+    # 以前只判"是不是列表"：元素写成相对路径会被静默接受，而 scope_of /
+    # write_blocked 都拿它当绝对路径比——"哪些算项目自己的、能写到哪儿"
+    # 于是随运行目录变
+    roots = _path_items(reader, 'SCOPE["project"]', raw.get("project"))
+    excluded = _path_items(reader, 'SCOPE["excluded"]', raw.get("excluded"))
     if not roots:
         roots = [config.root]
     if not excluded:
@@ -578,12 +607,13 @@ def _verify_command(reader):
 
     留空表示不验证：风格修复（尤其是改名）可能只改声明处而让别的文件编译
     不过，不验证就等于把风险直接交给使用者，因此留空时上层会明确提示。
+
+    命令里的路径不必是绝对路径（按工作目录解释是本来的语义），类型与 SCOPE
+    这类"列表里放路径"的项共用同一套判定。
     """
-    value = reader.value("VERIFY_COMMAND") or []
-    if isinstance(value, str):
-        reader.fail(Code.CONFIG_BAD_VALUE,
-                    "VERIFY_COMMAND 必须是列表，如 [\"make\", \"-C\", BUILD_DIR]")
-        return []
-    return [str(item) for item in value]
+    return [str(item) for item in _path_items(
+        reader, "VERIFY_COMMAND", reader.value("VERIFY_COMMAND"),
+        must_be_absolute=False,
+        hint="，例如 [\"make\", \"-C\", BUILD_DIR]")]
 
 

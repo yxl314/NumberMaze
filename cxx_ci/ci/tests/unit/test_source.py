@@ -6,8 +6,7 @@
 `encode("utf-8")` 整文件写回：GBK 存量工程跑一次改写，中文注释会变成 U+FFFD
 且不报错。这里钉住三件事——判定不出编码的文件只读、写回按原编码、CRLF 保留。
 
-测试自身也受 Python 3.4 约束（见 test_py34.py），不能用 f-string 与
-Path.write_text。
+测试自身也受 Python 3.4 约束，不能用 f-string 与 Path.write_text。
 """
 
 import os
@@ -22,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from lib import boundary, source  # noqa: E402
+from lib import source  # noqa: E402
 
 
 class Stub(object):
@@ -139,28 +138,6 @@ class TestReadOnly:
         assert "第 2 行" in message, message
 
 
-class TestBoundaryFix:
-    def test_gbk_guard_is_fixed_without_corruption(self, workdir):
-        path = write_bytes(os.path.join(workdir, "a.h"),
-                           GBK_TEXT.encode(GBK) + b"int value;\n")
-        report = boundary.guard_report([path], workdir, (".h",))
-        changed = boundary.fix_guards(report, gbk_config())
-        assert [path] == changed
-        data = read_bytes(path)
-        assert "\ufffd" not in data.decode(GBK)
-        assert u"\u4e2d\u6587\u6ce8\u91ca" in data.decode(GBK)
-        assert [] == boundary.guard_report([path], workdir, (".h",))
-
-    def test_gbk_guard_is_skipped_without_config(self, workdir):
-        path = write_bytes(os.path.join(workdir, "a.h"),
-                           GBK_TEXT.encode(GBK) + b"int value;\n")
-        before = read_bytes(path)
-        report = boundary.guard_report([path], workdir, (".h",))
-        changed = boundary.fix_guards(report, utf8_config())
-        assert [] == changed
-        assert before == read_bytes(path)
-
-
 class TestWritesAreAtomic:
     """写盘要么是完整的旧文件，要么是完整的新文件——不能是半截。
 
@@ -210,3 +187,52 @@ class TestWritesAreAtomic:
         source.write_bytes(str(tmp_path / "ok.txt"), b"data")
         names = sorted(item.name for item in tmp_path.iterdir())
         assert ["ok.txt"] == names, names
+
+class TestRoundTripEdgeCases:
+    """编码/换行往返的边界：逐项还原是契约承诺（CONTRACT.md 的"编码、换行符、
+    BOM、文件末尾换行逐项还原"）。
+    """
+
+    def _round_trip(self, tmp_path, name, data):
+        target = tmp_path / name
+        handle = open(str(target), "wb")
+        try:
+            handle.write(data)
+        finally:
+            handle.close()
+        text, info = source.read_source(str(target), None)
+        if text is None:
+            return None, info
+        source.write_source(str(target), text, info)
+        handle = open(str(target), "rb")
+        try:
+            return handle.read(), info
+        finally:
+            handle.close()
+
+    def test_an_empty_file_stays_empty(self, tmp_path):
+        """空文件按原始字节判"有结尾换行"，写回时凭空补一个 \n。"""
+        after, _info = self._round_trip(tmp_path, "a.cpp", b"")
+        assert b"" == after, after
+
+    def test_a_file_without_a_final_newline_keeps_it_that_way(self, tmp_path):
+        after, _info = self._round_trip(tmp_path, "b.cpp", b"int a=1;")
+        assert b"int a=1;" == after, after
+
+    def test_crlf_without_a_final_newline_leaves_no_stray_cr(self, tmp_path):
+        """删结尾换行只删一个字符时，CRLF 会在尾巴上留下一个孤立的 \r。"""
+        original = b"int a=1;\r\nint b=2;"
+        after, _info = self._round_trip(tmp_path, "c.cpp", original)
+        assert original == after, after
+
+    def test_a_bom_less_utf16_file_is_left_alone(self, tmp_path):
+        """NUL 是合法 UTF-8，无 BOM 的 UTF-16 会被"顺利"解出来然后按 UTF-8 改坏。"""
+        original = "int a=1;\n".encode("utf-16-le")
+        after, info = self._round_trip(tmp_path, "d.cpp", original)
+        assert after is None, after
+        assert "UTF-16" in info.reason, info.reason
+
+    def test_a_utf16_file_with_bom_round_trips(self, tmp_path):
+        original = b"\xff\xfe" + "int a=1;\n".encode("utf-16-le")
+        after, _info = self._round_trip(tmp_path, "e.cpp", original)
+        assert original == after, after

@@ -210,13 +210,18 @@ LOCK_NAME = ".cxx-ci.lock"
 LOCK_ENV = "CXX_CI_LOCK_HELD"
 
 
-def lock_path(log_dir):
-    """互斥锁文件的位置：日志目录下；没有日志目录时返回空串。"""
-    return os.path.join(str(log_dir), LOCK_NAME) if log_dir else ""
+def lock_path(target):
+    """互斥锁文件的位置：被保护的构建树里。
+
+    锁要保护的其实是构建树（两份工具同时改同一棵树才会互相破坏），所以键取
+    构建树而不是日志目录：只改 CI_LOG_DIR 就会拿到两把不同的锁，而它们改的是
+    同一棵树。锁文件放在构建树里，clean 会显式保留它（见 clean.kept_names）。
+    """
+    return os.path.join(str(target), LOCK_NAME) if target else ""
 
 
-def acquire_lock(log_dir):
-    """占用这个工程的互斥锁，返回 (句柄或 None, 错误说明)。
+def acquire_lock(target):
+    """占用这棵构建树的互斥锁，返回 (句柄或 None, 错误说明)。
 
     两份工具在同一个工程上同时跑会互相破坏：一份的 clean 会清掉另一份正在用的
     构建树（随后 configure 失败，好工程判红），阶段日志被两份交替追加成"失败+
@@ -226,12 +231,13 @@ def acquire_lock(log_dir):
     flock 由内核在进程退出时自动释放，因此进程被 SIGKILL 也不会留下死锁；锁文件
     本身留在盘上无害。取不到锁时就直说"有另一份在跑"，不猜、不等待、不硬闯。
     """
-    path = lock_path(log_dir)
+    path = lock_path(target)
     if not path:
         return None, ""
-    if os.environ.get(LOCK_ENV):
-        # 同一棵进程树里已经有人持锁：它保证了这个工程上只有我们这一串在跑。
-        # 这里不再取锁，也不负责释放
+    if os.environ.get(LOCK_ENV) == path:
+        # 同一棵进程树里已经有人持着**同一把**锁：它保证了这棵树上只有我们这一串
+        # 在跑。这里不再取锁，也不负责释放。比对路径而不是"变量存在即跳过"：
+        # 后者会让任何自带这个变量的环境（哪怕是别的工程设的）都绕开互斥
         return None, ""
     try:
         if not os.path.isdir(os.path.dirname(path)):
@@ -251,9 +257,10 @@ def acquire_lock(log_dir):
     except (IOError, OSError):
         # 写不进 pid 只影响排查时的线索，互斥本身已经拿到了
         pass
-    # 让子进程知道锁已经有人持着（BUILD_COMMAND / VERIFY_COMMAND 都会再起
-    # ci.py，它们不该、也不能再取一次）
-    os.environ[LOCK_ENV] = str(os.getpid())
+    # 让子进程知道**这一把**锁已经有人持着（BUILD_COMMAND / VERIFY_COMMAND 都会
+    # 再起 ci.py，它们不该、也不能再取一次）。记的是锁文件路径而不是 pid：
+    # 子进程要能判断"你持的是不是我要的这一把"，否则任何来源的同名变量都能绕过互斥
+    os.environ[LOCK_ENV] = path
     return handle, ""
 
 
@@ -272,3 +279,47 @@ def release_lock(handle):
     except (IOError, OSError):
         # 同上：这个句柄已经没用了
         pass
+
+
+def install_term_handler():
+    """把 SIGTERM 折算成 KeyboardInterrupt，让收尾与回滚照常走。
+
+    只处理 Ctrl-C 时，`kill` 或 CI 系统取消作业送来的 SIGTERM 会让驱动就地消失：
+    正在跑的阶段脚本与它拉起的编译树继续活着，而互斥锁随进程退出被内核释放——
+    紧接着的下一次运行不会再被拦住，两棵树在同一目录里打架。
+    """
+    def handler(_number, _frame):
+        raise KeyboardInterrupt()
+
+    try:
+        signal.signal(signal.SIGTERM, handler)
+    except (ValueError, OSError):
+        # 不在主线程或平台不支持：退回缺省行为
+        pass
+
+
+class PatternTimeout(Exception):
+    """一段正则匹配没有在墙钟上限内跑完。"""
+
+
+def run_with_deadline(func, seconds, error=None):
+    """在墙钟上限内跑 func；超时抛 error（缺省 PatternTimeout）。
+
+    用 SIGALRM 而不是线程：调用方是单线程的，而正则一旦开始回溯，只有信号能把
+    它打断。平台没有 SIGALRM（非 POSIX）时退化为不设上限——那时行为与不设限
+    一致，不会更糟。
+    """
+    error = error or PatternTimeout
+    if not hasattr(signal, "SIGALRM") or not hasattr(signal, "setitimer"):
+        return func()
+
+    def _alarm(_number, _frame):
+        raise error()
+
+    previous = signal.signal(signal.SIGALRM, _alarm)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        return func()
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)

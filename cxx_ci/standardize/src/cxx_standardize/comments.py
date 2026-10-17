@@ -1,45 +1,59 @@
 """注释保护：让排版不触碰注释。
 
-clang-format 没有**保列号**的等价能力：`AlignTrailingComments: true` 会把手工
-对齐的行尾注释全部重排，`false` 更糟（全部塌成一个空格），`{Kind: Leave}` 保的
-是代码与注释之间的间隔而不是绝对列号。三者都不是"保持作者写法"，所以这一层
-必须自研。
+做法分三步：先把注释从源码里摘掉得到纯代码，交给 clang-format 排版；再用
+difflib 把"纯代码的行"与"排版后的行"对齐，按行把原注释回填——行尾注释挂回
+对应行的行尾，独占一行的注释挂回它下方那条代码之前。注释文本与代码到注释的
+间距原样保留。
 
-做法是把注释换成块注释占位符交给 clang-format，占位符作为普通 token 会随
-代码落到正确位置；排完再把占位符换回原注释文本，并按原列号补回空白。代码被
-排长、越过原列号时注释退到代码后一格，这次退让会被记下来——它是"注释优先的
-基线不成立"的直接证据，上层据此拒绝把这种结果当成稳定基线。
+按行对齐而不是按代码内容查找：`}` 这类短行在文件里出现多次，内容查找会把
+注释挂到错误的一行上。对齐用代码行的顺序信息，重排、拆行都不会错位。
 """
 
+import difflib
+import re
+from bisect import bisect_right
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-# 占位符前缀候选。占位符要能被 clang-format 当作块注释接受，又不能与用户
-# 代码里已有的同名标识符混淆，冲突时换用下一种。
-MARKERS: tuple[str, ...] = ("CXX_CI_COMMENT", "CXX_CI_MARK", "CXX_CI_TMP")
+# 兼容旧配置里的注释模式取值：none 关掉保护，其余一律按保护处理
+OFF = "none"
+
+# clang-format 的 FixNamespaceComments 会给命名空间收尾 `}` 补 `// namespace X`。
+# 排纯代码时它是新造出来的注释，回填前丢弃。
+_NS_COMMENT = re.compile(
+    r"^(?P<body>.*\S)\s+//\s*namespace(?:\s+[A-Za-z_][\w:]*)?\s*$")
+
+
+def drop_namespace_comments(text: str) -> str:
+    """去掉 clang-format 自己补上的命名空间收尾注释。"""
+    out = []
+    for line in text.splitlines(keepends=True):
+        body = line[:-1] if line.endswith("\n") else line
+        match = _NS_COMMENT.match(body)
+        if match and match.group("body").rstrip().endswith("}"):
+            out.append(match.group("body") + ("\n" if line.endswith("\n") else ""))
+        else:
+            out.append(line)
+    return "".join(out)
 
 
 @dataclass(frozen=True, slots=True)
 class Comment:
-    """一条注释及其在原文件里的位置。
+    """一条注释及其回填依据。
 
-    text 是含定界符的原文，own_line 表示注释前只有空白（独占一行），column
-    是注释起点相对行首的列号（从 0 起），lead 是它前面的空白。column 与
-    own_line 是还原时唯一的依据；注释内容本身只做原样回填，不再解析。
+    text 含定界符的原文；own_line 表示注释独占一行；indent 是独占行注释的行首
+    缩进；column 是行尾注释起点的原列号（从 0 起）；line 是它关联的纯代码行下标
+    （行尾注释=所在行，独占行注释=下方第一条代码行；等于代码行数表示文件尾）。
     """
 
     text: str
     lead: str
     own_line: bool
     column: int
-    # 注释种类：line（`//`）或 block（`/* */`）。占位符必须保持同样的种类——
-    # 行注释右边不可能再挂代码，clang-format 因此不会把下一行的 `{` 挪上来；
-    # 换成块注释占位符就会，实测 `explicit Calc(int v) : m_v(v)  // 单位:毫秒`
-    # 排完变成 `... // 单位:毫秒 {}`，`{` 被吃掉，再排一次结果又变
     kind: str = "block"
-    # 代码末尾到注释起点之间的空格数。还原时按这个间距平移，而不是按绝对列号
-    # 硬塞——代码变宽/变窄时注释跟着走，保持原有的视觉关系
     gap: int = 1
+    indent: str = ""
+    line: int = 0
 
 
 def _is_digit_separator(text: str, i: int) -> bool:
@@ -57,11 +71,9 @@ def _is_digit_separator(text: str, i: int) -> bool:
 def _skip_literal(text: str, i: int) -> int:
     """跳过字符串或字符字面量，返回结束后的下标。
 
-    引号本身不是注释的开头，但字符串里可以出现 `//` 与 `/*`：不先跳过字面量，
-    扫描器会把 "http://x" 里的 `//` 当成行尾注释，后半行代码就全丢了。
-
-    数字分隔符要先让开：`1'000` 里的 `'` 会被当成字符字面量的开头，一路吃到
-    文件尾，那一行之后的注释全部丢失。
+    字符串里可以出现 `//` 与 `/*`：不先跳过字面量，扫描器会把 "http://x" 里的
+    `//` 当成行尾注释，后半行代码就全丢了。数字分隔符要先让开：`1'000` 里的
+    `'` 被当成字符字面量开头会一路吃到文件尾。
     """
     if text[i] == "'" and _is_digit_separator(text, i):
         return i + 1
@@ -72,22 +84,19 @@ def _skip_literal(text: str, i: int) -> int:
     n = len(text)
     while i < n:
         if text[i] == "\\":
-            # 转义序列整体跳过：`\"` 不结束字符串，`\\` 之后才是真引号
             i += 2
             continue
         if text[i] == quote:
             return i + 1
         i += 1
-    # 未闭合的字面量：吃到文件尾，宁可漏掉注释也不误判
     return n
 
 
 def _skip_raw(text: str, i: int) -> int:
     """跳过 C++11 原始字符串字面量（含自定义定界符）。
 
-    原始字符串里不转义，内容可以包含引号与 `//`；结束标记是 `)定界符"`，
-    定界符由开头的 `R"定界符(` 决定。只按固定形状找结束会在自定义定界符上
-    截错位置。
+    结束标记是 `)定界符"`，定界符由开头的 `R"定界符(` 决定；只按固定形状找
+    结束会在自定义定界符上截错位置。
     """
     start = text.find("(", i + 2)
     if start < 0:
@@ -98,32 +107,9 @@ def _skip_raw(text: str, i: int) -> int:
     return len(text) if end < 0 else end + len(close)
 
 
-def _line_start(text: str, i: int) -> int:
-    """下标 i 所在行的行首下标。"""
-    return text.rfind("\n", 0, i) + 1
-
-
-def _own_line(text: str, i: int) -> bool:
-    """注释是否独占一行（其前只有空白）。"""
-    return text[_line_start(text, i):i].strip() == ""
-
-
-def _lead(text: str, i: int) -> str:
-    """注释前的空白，供调用方核对原始缩进。"""
-    begin = i
-    while begin > 0 and text[begin - 1] in " \t":
-        begin -= 1
-    return text[begin:i]
-
-
-def scan_comments(text: str) -> list[Comment]:
-    """找出所有注释，按出现顺序返回。
-
-    扫描必须同时跳过字面量：注释符只有出现在代码里才算注释。块注释内部的
-    引号同样是普通字符，不能让它开启字面量扫描——这一步交给"找到 `*/` 就
-    整体跳过"来完成。
-    """
-    found: list[Comment] = []
+def _spans(text: str) -> list[tuple[int, int]]:
+    """所有注释的 [起点, 终点) 区间。"""
+    found: list[tuple[int, int]] = []
     i = 0
     n = len(text)
     while i < n:
@@ -140,127 +126,183 @@ def scan_comments(text: str) -> list[Comment]:
         else:
             i += 1
             continue
-        line_start = _line_start(text, i)
-        kind = "line" if text.startswith("//", i) else "block"
-        found.append(Comment(text[i:end], _lead(text, i), _own_line(text, i),
-                             i - line_start, kind, _gap(text, i, line_start)))
+        found.append((i, end))
         i = end
     return found
 
 
-def marker_for(text: str, index: int) -> str:
-    """选一个不与文本冲突的占位符前缀。
+def _line_offsets(text: str) -> list[int]:
+    """每一行行首的下标。"""
+    offsets = [0]
+    for index, ch in enumerate(text):
+        if ch == "\n":
+            offsets.append(index + 1)
+    return offsets
 
-    index 是期望的起始候选（越界退回第一个），候选按顺序轮转尝试；全都被
-    文本占用时返回最后一个：宁可占位符与代码同形，也不能返回空串让排版
-    失去占位符。一次 strip/restore 必须用同一个前缀，因此调用方只选一次。
+
+def _clean_lines(text: str, spans: Sequence[tuple[int, int]]) -> list[str]:
+    """逐行给出"去掉注释后"的文本，行结构与原文件一一对应。
+
+    换行一律保留（哪怕它落在块注释内部），这样 clean 的下标始终等于原文件
+    行号，锚点与行号才对得上。
     """
-    start = index if 0 <= index < len(MARKERS) else 0
-    order = MARKERS[start:] + MARKERS[:start]
-    for prefix in order:
-        if prefix not in text:
-            return prefix
-    return MARKERS[-1]
-
-
-def _gap(text: str, at: int, line_start: int) -> int:
-    """注释起点与它前面代码末尾之间隔了几个空格。"""
-    head = at
-    while head > line_start and text[head - 1] in " \t":
-        head -= 1
-    return at - head
-
-
-def strip_comments(text: str, prefix: str) -> str:
-    """把注释换成块注释占位符，返回替换后的文本。
-
-    位置在这里重新扫描确定，不吃调用方给的注释列表：`Comment` 只记列号不记
-    绝对偏移，而"这一处是不是真的注释"只有走一遍全文才能判断。编号补齐四位，
-    保证同一次替换里占位符长度一致。
-    """
-    out: list[str] = []
-    i = 0
-    n = len(text)
-    k = 0
-    while i < n:
-        ch = text[i]
-        if ch in "\"'" or text.startswith('R"', i):
-            end = _skip_literal(text, i)
-            out.append(text[i:end])
-            i = end
+    masked = bytearray(len(text))
+    for start, end in spans:
+        for i in range(start, end):
+            masked[i] = 1
+    lines: list[str] = []
+    buf: list[str] = []
+    for index, ch in enumerate(text):
+        if ch == "\n":
+            lines.append("".join(buf) + "\n")
+            buf = []
             continue
-        if text.startswith("//", i):
-            end = text.find("\n", i)
-            end = n if end < 0 else end
-        elif text.startswith("/*", i):
-            end = text.find("*/", i + 2)
-            end = n if end < 0 else end + 2
+        if not masked[index]:
+            buf.append(ch)
+    if buf:
+        lines.append("".join(buf))
+    return lines
+
+
+def _parse(text: str) -> tuple[list[str], list[Comment]]:
+    """摘注释：返回 (纯代码行, 注释列表)。
+
+    纯代码行只保留含代码的行（仅注释的行整行删掉）；注释的 line 指向它在
+    纯代码行里的关联行。
+    """
+    spans = _spans(text)
+    if not spans:
+        return text.splitlines(keepends=True), []
+    clean = _clean_lines(text, spans)
+    offsets = _line_offsets(text)
+    covered: set[int] = set()
+    for start, end in spans:
+        first = bisect_right(offsets, start) - 1
+        last = bisect_right(offsets, end - 1) - 1 if end > start else first
+        for row in range(first, last + 1):
+            covered.add(row)
+    # 仅注释的行整行删掉；其余行（含空行）保留
+    remap: dict[int, int] = {}
+    kept: list[str] = []
+    for row, line in enumerate(clean):
+        if line.strip() == "" and row in covered:
+            continue
+        remap[row] = len(kept)
+        kept.append(line)
+
+    def code_index(row):
+        """原行号 → 纯代码行下标；被删的行落到它后面第一行。"""
+        for probe in range(row, len(clean)):
+            if probe in remap:
+                return remap[probe]
+        return len(kept)
+
+    comments: list[Comment] = []
+    for start, end in spans:
+        row = bisect_right(offsets, start) - 1
+        line_start = offsets[row]
+        lead = text[line_start:start]
+        kind = "line" if text.startswith("//", start) else "block"
+        # 独占一行 = 前面只有空白，且这一行本身没有代码（块注释后面可能还有代码）
+        own_line = lead.strip() == "" and clean[row].strip() == ""
+        if own_line:
+            index = code_index(row + 1)
+            comments.append(Comment(text[start:end], lead, True, 0, kind,
+                                    indent=lead, line=index))
         else:
-            out.append(ch)
-            i += 1
-            continue
-        # 占位符保持原注释的种类：见 Comment.kind 的说明
-        if text.startswith("//", i):
-            out.append(f"// {prefix}{k:04d}")
-        else:
-            out.append(f"/*{prefix}{k:04d}*/")
-        k += 1
-        i = end
-    return "".join(out)
+            head = start
+            while head > line_start and text[head - 1] in " \t":
+                head -= 1
+            comments.append(Comment(text[start:end], text[head:start], False,
+                                    start - line_start, kind,
+                                    gap=start - head, line=code_index(row)))
+    return kept, comments
 
 
-def restore_comments(text: str, comments: Sequence[Comment], prefix: str,
-                     moved: list | None = None,
-                     broken: list | None = None) -> str:
-    """把占位符换回原注释，按原间距平移；代码列变了注释跟着走。
+def scan_comments(text: str) -> list[Comment]:
+    """找出所有注释，按出现顺序返回。"""
+    return _parse(text)[1]
 
-    给出 moved 时，把"注释列号与原来不同"的行尾注释记成
-    (编号, 原列号, 排版后的列)。注释优先的基线要求列号不变，这种移动就是
-    基线漂移的证据，上层据此判定，而不是把它当成代码问题。
 
-    给出 broken 时，把"还原后注释后面还挂着代码"的行记成 (编号, 行号)。
-    行注释右边绝不该再有代码——有就说明还原把代码变成了注释的一部分，
-    这种产物可编译但语义已变，必须报错而不是写盘。
+def strip_comments(text: str) -> str:
+    """去掉全部注释：仅注释的行整行删掉，含代码的行保留代码。"""
+    return "".join(_parse(text)[0])
+
+
+def split(text: str) -> tuple[str, list[Comment]]:
+    """一次拿到纯代码文本与注释列表。"""
+    lines, comments = _parse(text)
+    return "".join(lines), comments
+
+
+def _normalize(line: str) -> str:
+    """去掉全部空白：对齐时忽略缩进与空格差异。"""
+    return "".join(line.split())
+
+
+def _row_map(code_lines: Sequence[str],
+             formatted_lines: Sequence[str]) -> dict[int, tuple[int, int]]:
+    """纯代码行下标 → (排版后起始行, 结束行)。
+
+    用 difflib 对齐两边的代码行：重排、增删空行、把一条语句拆成多行都能对上。
     """
-    for k, item in enumerate(comments):
-        token = placeholder(prefix, k, item.kind)
-        at = text.find(token)
-        if at < 0:
-            # 占位符被 clang-format 吃掉（注释落在宏参数等奇怪位置）：留着
-            # 不动比猜一个位置安全，注释文本仍会由调用方原先的字节兜底
+    matcher = difflib.SequenceMatcher(
+        a=[_normalize(line) for line in code_lines],
+        b=[_normalize(line) for line in formatted_lines],
+        autojunk=False)
+    mapping: dict[int, tuple[int, int]] = {}
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for offset in range(i2 - i1):
+                mapping[i1 + offset] = (j1 + offset, j1 + offset)
+        elif tag in ("replace", "delete", "insert"):
+            last = max(j1, j2 - 1)
+            for index in range(i1, i2):
+                mapping[index] = (j1, last)
+    return mapping
+
+
+def restore_comments(formatted: str, comments: Sequence[Comment],
+                     code_text: str) -> tuple[str, list]:
+    """把注释回填到排版结果里，返回 (文本, 无法回填的注释下标)。
+
+    code_text 是摘掉注释后的纯代码，用来与 formatted 做行对齐。
+    """
+    code_lines = code_text.splitlines()
+    formatted_lines = formatted.splitlines()
+    mapping = _row_map(code_lines, formatted_lines)
+    total = len(formatted_lines)
+
+    before: dict[int, list[Comment]] = {}
+    after: dict[int, list[Comment]] = {}
+    tail: list[Comment] = []
+    unplaced: list[int] = []
+    for index, item in enumerate(comments):
+        if item.line >= len(code_lines):
+            tail.append(item)
             continue
-        line_start = _line_start(text, at)
+        start, end = mapping.get(item.line, (total, total))
         if item.own_line:
-            indent = text[line_start:at]
-            text = text[:line_start] + indent + item.text + text[at + len(token):]
-            continue
-        head = at
-        while head > line_start and text[head - 1] in " \t":
-            head -= 1
-        column = head - line_start
-        # 按**原间距**平移，不按绝对列号硬塞：代码列变了注释跟着走，
-        # 不会因为代码变宽而把注释挤到语法记号后面
-        want = item.gap if item.gap > 0 else 1
-        if column + want != item.column and moved is not None:
-            moved.append((k, item.column, column + want))
-        text = text[:head] + (" " * want) + item.text + text[at + len(token):]
-        if broken is not None and item.kind == "line":
-            # 从**注释末尾**往后看：注释本身当然占着这一行，要查的是它后面
-            # 还有没有代码（那才是"代码被注释吃掉"）
-            after = head + want + len(item.text)
-            rest = text[after:_line_end(text, after)]
-            if rest.strip():
-                broken.append((k, text.count("\n", 0, after) + 1))
-    return text
+            before.setdefault(start, []).append(item)
+        else:
+            after.setdefault(end, []).append(item)
 
-
-def _line_end(text: str, at: int) -> int:
-    end = text.find("\n", at)
-    return len(text) if end < 0 else end
-
-
-def placeholder(prefix: str, index: int, kind: str = "block") -> str:
-    """一条注释对应的占位符文本。种类必须与原注释一致，理由见 Comment.kind。"""
-    if kind == "line":
-        return f"// {prefix}{index:04d}"
-    return f"/*{prefix}{index:04d}*/"
+    out: list[str] = []
+    for row, line in enumerate(formatted_lines):
+        for item in before.get(row, ()):
+            out.append(item.indent + item.text)
+        newline = line
+        if row in after:
+            # 注释优先：钉回作者原来的列号；代码对齐后越过该列时才右移，
+            # 让开代码只留一个空格
+            newline = line.rstrip()
+            for item in after[row]:
+                spaces = max(item.column - len(newline), 1)
+                newline = newline + (" " * spaces) + item.text
+        out.append(newline)
+    for item in tail:
+        out.append(item.indent + item.text)
+    text = "\n".join(out)
+    if formatted.endswith("\n"):
+        text += "\n"
+    return text, unplaced

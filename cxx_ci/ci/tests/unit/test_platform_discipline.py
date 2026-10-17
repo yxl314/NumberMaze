@@ -100,7 +100,7 @@ def test_platform_decisions_live_only_in_platform_module():
 
 
 def test_both_sides_have_the_platform_module():
-    """两侧各要有一份：平行实现的一致性由 test_platform_parity.py 守。"""
+    """两侧各要有一份 platform.py。"""
     for side, path in PLATFORM_PATHS.items():
         assert path.is_file(), "{} 侧缺少 platform.py: {}".format(side, path)
 

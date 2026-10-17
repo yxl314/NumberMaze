@@ -35,18 +35,13 @@ ci/
 
 ---
 
-## 接入一个新工程：三条命令
+## 接入一个新工程：两条命令
 
 ```sh
-python3 ci/ci.py init --project-root <工程根>    # 探测并生成带依据注释的配置
 python3 ci/ci.py doctor --config config/ci.py    # 只读自检：现在生效的是什么
 python3 ci/ci.py --config config/ci.py           # 跑门禁
 ```
 
-* **`init`**：探测构建工具与构建文件、构建目录、测试指令、`SCOPE`、编译标准，
-  每一项都写成带 `依据:` 的注释；探测不到就写 `TODO: 需要人工填写`。多份候选
-  并列时**不猜**，列出来让人选。生成的是 `<工程>/config/ci.py`，工具目录里
-  只有 `config.py.example`。
 * **`doctor`**：四段一屏内——①环境（Python、构建工具、clang 两件套的实际路径
   与版本、valgrind / libasan、依赖清单、**平台级别与内存检查实探测结果**）；
   ②生效配置（关键取值 + 每项来源：配置文件 / 推导 / 缺省）；③上次结论（从报告
@@ -55,9 +50,6 @@ python3 ci/ci.py --config config/ci.py           # 跑门禁
 * **`--help-config`**：按「必需 / 常用 / 调参」三层列出每一项的语义、推导规则、
   何时要动；调参层另给**动完怎么验证**。与 `config.py.example` 同源（都由
   配置元数据生成），所以文档不会与实现分叉。
-* **`migrate-config`**：旧配置项一次性改干净（`--dry-run` 出 diff、落盘前写
-  `.bak`）；规则有歧义时只报告不动手。
-
 首次接入建议把存量登记成基线，门禁当天变绿、以后只对新问题判红：
 `cxx-standardize --config config/standardize.py style --record`。
 
@@ -71,7 +63,7 @@ GNU/Linux 全部能力；macOS / BSD 只保证排版与风格（内存检查标 
 ## 使用
 
 ```bash
-python3 ci.py                      # 基础流程：boundary/clean/build/build_test/run_test/memcheck
+python3 ci.py                      # 基础流程：clean/build/build_test/run_test/memcheck
 python3 ci.py --only build         # 只跑指定阶段
 python3 ci.py --skip memcheck      # 跳过指定阶段
 python3 ci.py --level verbose      # 透传阶段输出
@@ -173,7 +165,6 @@ python3 ci/ci.py
 
 ```bash
 python3 ci/stages/build.py --config /path/to/config.py
-python3 ci/stages/boundary.py --fix      # 补齐或改正头文件宏守卫
 ```
 
 ## 配置
@@ -240,7 +231,6 @@ python3 ci/stages/boundary.py --fix      # 补齐或改正头文件宏守卫
 
 | 阶段 | 工具 | 说明 |
 | --- | --- | --- |
-| boundary | — | 只读的纪律检查：`detail::` 归属与头文件宏守卫，见下 |
 | clean | — | 清空构建目录，保留编译数据库与日志目录（前者是另一个项目的输入），拒绝删除项目外的路径 |
 | build | cmake / qmake | 配置并编译 |
 | build_test | 同上 | 编译测试 |
@@ -254,42 +244,6 @@ python3 ci/stages/boundary.py --fix      # 补齐或改正头文件宏守卫
 汇总里也单独列出——**跳过不等于通过**，它只是不把"机器上没装构建工具或
 valgrind"错报成"代码有问题"。
 
-### 配置审计（audit）
-
-门禁脚本自身也是最容易被绕过的代码：有人图省事在脚本里写死路径或工具名，配置
-就慢慢变成摆设——改配置不生效，行为随文件漂移。配置加载成功后、选阶段之前自动
-跑三条只读检查，把"代码必须严格经配置取值"变成可机检的纪律：
-
-| 检查 | 判据 | 报什么 |
-| --- | --- | --- |
-| 死配置 | 配置对象上的某个键，在被审源码里从没有以 `cfg.键` / `config.键`（或 `getattr(config, "键")`）的形式取过值 | `死配置: cfg.K 从未被引用` |
-| 配置旁路 | 被审源码里的字符串常量（docstring 不算）与某个配置取值完全相等 | `配置旁路: 文件:行 的字面量 'X' 应改用 cfg.K` |
-| 编译标准锁定 | 项目根递归扫构建文件：承载变量（`STD_VARS`）缺失或值不等于 `STD_PIN`；任何一行出现别的 `-std=`（**含注释**） | `编译标准漂移: 文件:行 …` |
-
-第三条的动机是真实事故：`.pro` 注释里写的 `-std=c++11` 示例曾被 qmake 静默当真，
-覆盖了全局标准。qmake 项目按 `.pro` 检查，cmake 项目检查 `CMAKE_CXX_STANDARD`。
-
-被审对象是 `ci.py` + `lib/` + `stages/` + 项目配置 + `AUDIT_FILES_GLOBS`。旁路
-检查只覆盖**项目自己的文件**：`lib/`、`stages/` 里必然含 `cmake`/`qmake`/`error`
-这类与配置取值同形的词汇表（它们是 schema，不是绕过），一并判红会让审计永远不绿。
-
-`--no-audit` 跳过审计，仅用于调试审计本身或测试里刻意改写工具源码的场合。
-
-### 内部面边界（boundary）
-
-两条纪律都属于"仓内代码的内部面"，与排版/风格的"改不改得好看"无关，因此排在
-构建之前：违规没必要再花构建时间。
-
-| 检查 | 判据 | 能自动修吗 |
-| --- | --- | --- |
-| `detail::` 归属 | 受管目录（`BOUNDARY_DIRS`）下的源文件里，出现 `DETAIL_MARK`（缺省 `detail::`）但文件不在 `DETAIL_DIRS` 内 | 不能。出现它意味着绕过门面直接调内部实现，只能人工改回公开入口 |
-| 头文件宏守卫 | 守卫名 = 文件相对项目根的路径，非字母数字换下划线后全大写（`Source/CDBurn/Tools/Notify/Notify.h` → `SOURCE_CDBURN_TOOLS_NOTIFY_NOTIFY_H`） | 能。`python3 ci/stages/boundary.py --fix` 补齐或改正 |
-
-判据先剥注释再比对：逐字符跳过 `//`、`/* */`（跨行）、`"..."`/`'...'`（含转义）
-与 C++11 原始字符串，注释位置换成等长空格——**在注释里说明内部实现不算违规**，
-行列对齐也因此保持不变。头文件宏守卫的 `--fix` 是维护动作而非门禁动作，所以它
-挂在阶段脚本上，不进 `ci.py` 的参数表：驱动层不该知道某个阶段独有的开关。
-
 ## 测试报告
 
 `run_test` 不只看退出码：逐例失败由报告适配器解析后发成 `#fail`，因此
@@ -298,13 +252,11 @@ valgrind"错报成"代码有问题"。
 | 适配器 | 指纹 |
 | --- | --- |
 | `gtest` | `[==========]`、`[ RUN ]` |
-| `qtest` | `********* Start testing`、`FAIL!  :`、`Totals:` |
-| `catch2` | `~~~`、`test cases:`、`<文件>:<行>: FAILED:` |
 | `regex` | 自研 runner，用 `TEST_FAIL_PATTERN` / `TEST_TOTAL_PATTERN` |
 | `exit-code` | 只看退出码（旧语义） |
 
 `auto` 按上表顺序试探首个命中的指纹。**汇总逐段累加**：多套件 runner 会把
-多个测试可执行文件串起来跑，每跑完一个打印一段 `Totals:`，只取首段会把
+多个测试可执行文件串起来跑，每跑完一个打印一段汇总，只取首段会把
 用例总数报成单个可执行文件的规模（实测 29 段 245 例被报成 11 例）。汇总行
 给出用例数与套件数：
 
@@ -505,14 +457,14 @@ python3 -m pytest ci/tests/unit          # 单元
 python3 -m pytest ci/tests/integration   # 集成
 ```
 
-测试自身也受 3.4 约束（它们要在老机器上跑），`test_py34.py` 静态拦住 f-string、
-`pathlib.read_text`、`subprocess.run` 这类新接口。
+测试自身也受 3.4 约束（它们要在老机器上跑），不写 f-string、`pathlib.read_text`、
+`subprocess.run` 这类新接口。
 
 ## 依赖
 
 **零第三方依赖**：只用标准库，因此老机器上不需要 pip。清单见
 [requirements/ci.txt](../requirements/ci.txt)——空清单，用于让"零依赖"成为可被
-审计看见的事实。
+检查看见的事实。
 
 | 依赖 | 用于 | 说明 |
 | --- | --- | --- |

@@ -17,6 +17,8 @@
 from cxx_standardize import style
 from cxx_standardize.errors import Code
 
+import os
+
 from std_support import CONFIG_TEMPLATE
 from test_flows import style_env
 
@@ -182,46 +184,3 @@ class TestIncompleteIsNotEmpty:
         code, out, err = project.run(["style", "--record"], env=env)
         assert "派生文件未就绪，结果不完整" in err, (out, err)
         assert "没有需要登记的诊断" in out, (out, err)
-
-
-def test_unfinished_apply_is_recovered_on_the_next_run(project):
-    """上一次没跑完，下一次运行先还原。
-
-    快照只放在内存里时，进程被 Ctrl-C 或 SIGKILL 打断就什么都不剩：源码停在
-    改了一半、还没判卷的状态，而下一次运行会把这份状态当成"本来就这样"照单
-    判绿——一份没人验过的状态被盖章通过。
-    """
-    from cxx_standardize import config as config_module
-    from cxx_standardize import style as style_mod
-
-    project.configure(CONFIG_TEMPLATE
-                      + "\nVERIFY_COMMAND = [\"/bin/true\"]\n")
-    project.write("src/a.cpp", "int f() {\n    int *p = 0;\n    return p ? 1 : 0;\n}\n")
-    config = config_module.load_config(str(project.path / "std" / "config"
-                                          / "config.py"))[0]
-
-    # 手工造一份"上次没跑完"的现场：日志在、源码是改过的样子
-    good = {config.root / "src" / "a.cpp": b"int f() {\n    int *p = 0;\n    return p ? 1 : 0;\n}\n"}
-    assert style_mod._journal_write(config, good)
-    project.write("src/a.cpp", "int f() {\n    int *p = nullptr;\n    return p ? 1 : 0;\n}\n")
-
-    assert style_mod._recover_unfinished(config)
-    assert "0;" in project.read("src/a.cpp"), project.read("src/a.cpp")
-    assert not style_mod._journal_read(config), "还原后必须清掉日志"
-
-
-def test_a_finished_apply_leaves_no_journal(project):
-    """跑完（判卷通过）就不该留下日志，否则下一次运行会把正常结果又还原回去。"""
-    from cxx_standardize import config as config_module
-    from cxx_standardize import style as style_mod
-
-    project.configure(CONFIG_TEMPLATE
-                      + "\nVERIFY_COMMAND = [\"/bin/true\"]\n")
-    # 窄规则集：Checks: "*" 会给出互相冲突的修复，工具会（正确地）拒跑
-    project.write(".clang-tidy", "Checks: '-*,modernize-use-nullptr'\n")
-    project.write("src/a.cpp", "int f() {\n    int *p = 0;\n    return p ? 1 : 0;\n}\n")
-    code, out, err = project.run(["style", "--apply"])
-    assert 0 == code, (out, err)
-    config = config_module.load_config(str(project.path / "std" / "config"
-                                          / "config.py"))[0]
-    assert not style_mod._journal_read(config)

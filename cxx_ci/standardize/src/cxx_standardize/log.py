@@ -64,12 +64,21 @@ def log_path(config, stage):
 
 
 def truncate_log(config, stage):
-    """开跑前清空该阶段的日志，避免上一次运行的内容混进来。"""
+    """开跑前清空该阶段的日志，避免上一次运行的内容混进来。
+
+    日志是旁路产物：目录被占、只读、写满都不该把整轮工具打崩。日志路径是配置里
+    的一项，写错（指向一个普通文件、一个只读目录）时以前会抛 FileExistsError /
+    PermissionError 一路穿到顶层，整轮退出 1，而退出码 1 的含义是"有待改动"。
+    """
     path = log_path(config, stage)
     if not path:
         return
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text("", encoding="utf-8")
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text("", encoding="utf-8")
+    except (OSError, ValueError):
+        # 清不掉就让旧内容留着：写入是追加，读者至少能看到最新一次的输出
+        pass
 
 
 def append_log(config, stage, text):
@@ -77,11 +86,15 @@ def append_log(config, stage, text):
     path = log_path(config, stage)
     if not path or not text:
         return
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as handle:
-        handle.write(text)
-        if not text.endswith("\n"):
-            handle.write("\n")
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(text)
+            if not text.endswith("\n"):
+                handle.write("\n")
+    except (OSError, ValueError):
+        # 同上：写不成日志不该改变结论，调用方只看阶段结果
+        pass
 
 
 def noise(config, stage, text):

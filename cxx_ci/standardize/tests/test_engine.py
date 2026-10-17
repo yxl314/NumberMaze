@@ -12,7 +12,7 @@ import yaml
 
 import pytest
 
-from cxx_standardize import audit, naming_meta, prefix, tidy, xfail
+from cxx_standardize import audit, prefix, tidy, xfail
 from cxx_standardize.errors import Code
 
 
@@ -181,102 +181,8 @@ class Stub:
         self.clang_tidy_config = ""
         self.tidy_header_filter = ""
         self.naming_prefix = {}
-        self.naming_local_ban = "gmstv"
-        self.naming_exempt_keys = []
-        self.naming_premise_true = []
         for key, value in fields.items():
             setattr(self, key, value)
-
-
-class TestNamingMeta:
-    """口径表是唯一事实源，元检查现场推导 .clang-tidy 应为何。"""
-
-    def _tidy(self, project, prefix="m_", local_regexp=None, extra=""):
-        ban = local_regexp or naming_meta.local_ban_regexp("gmstv")
-        return project.write(".clang-tidy", f"""\
-Checks: 'readability-identifier-naming'
-CheckOptions:
-  - key: readability-identifier-naming.IgnoreMacros
-    value: 'true'
-  - key: readability-identifier-naming.PrivateMemberPrefix
-    value: {prefix}
-  - key: readability-identifier-naming.PrivateMemberCase
-    value: lower_case
-  - key: readability-identifier-naming.LocalVariablePrefix
-    value: _
-  - key: readability-identifier-naming.LocalVariableCase
-    value: lower_case
-  - key: readability-identifier-naming.LocalVariableIgnoredRegexp
-    value: '{ban}'
-  - key: readability-identifier-naming.LocalConstantPrefix
-    value: _
-  - key: readability-identifier-naming.LocalConstantCase
-    value: lower_case
-  - key: readability-identifier-naming.LocalConstantIgnoredRegexp
-    value: '{ban}'
-  - key: readability-identifier-naming.LocalPointerPrefix
-    value: _
-  - key: readability-identifier-naming.LocalPointerCase
-    value: lower_case
-  - key: readability-identifier-naming.LocalPointerIgnoredRegexp
-    value: '{ban}'
-  - key: readability-identifier-naming.LocalConstantPointerPrefix
-    value: _
-  - key: readability-identifier-naming.LocalConstantPointerCase
-    value: lower_case
-  - key: readability-identifier-naming.LocalConstantPointerIgnoredRegexp
-    value: '{ban}'
-{extra}""")
-
-    def _config(self, project, config_file="", **fields):
-        # config_file 为空时才现造一份：调用方自己写好的配置不能被覆盖掉
-        values = dict(clang_tidy_config=config_file or self._tidy(project),
-                      naming_prefix={"PrivateMember": "m_"},
-                      naming_premise_true=["IgnoreMacros"])
-        values.update(fields)
-        return Stub(**values)
-
-    def test_matching_config_passes(self, project):
-        assert [] == naming_meta.problems(self._config(project))
-
-    def test_weakened_prefix_is_reported(self, project):
-        """把 s_ 悄悄改回 g_ 这类回退，clang-tidy 只会"合规地绿"。"""
-        config = self._config(project,
-                              config_file=self._tidy(project, prefix="g_"))
-        found = naming_meta.problems(config)
-        assert found and "PrivateMemberPrefix" in found[0]
-
-    def test_missing_local_kind_is_reported(self, project):
-        text = Path(self._tidy(project)).read_text(encoding='utf-8').replace(
-            "readability-identifier-naming.LocalConstantPointerPrefix", "x")
-        config = self._config(
-            project, config_file=project.write(".clang-tidy", text))
-        found = naming_meta.problems(config)
-        assert any("LocalConstantPointerPrefix" in item for item in found)
-
-    def test_hand_edited_local_regexp_is_reported(self, project):
-        config = self._config(
-            project, config_file=self._tidy(project, local_regexp=".*"))
-        found = naming_meta.problems(config)
-        assert any("IgnoredRegexp" in item for item in found)
-
-    def test_exempt_key_must_not_come_back(self, project):
-        extra = ("  - key: readability-identifier-naming.MacroDefinitionCase\n"
-                 "    value: CamelCase\n")
-        config = self._config(
-            project, config_file=self._tidy(project, extra=extra),
-            naming_exempt_keys=["MacroDefinitionCase"])
-        found = naming_meta.problems(config)
-        assert any("MacroDefinitionCase" in item for item in found)
-
-    def test_no_declared_discipline_means_not_applicable(self, project):
-        """没声明口径表的工程不该被逼着编一套前缀。"""
-        assert [] == naming_meta.problems(Stub(naming_prefix={}))
-
-    def test_declared_but_unreadable_config_is_reported(self, project):
-        config = Stub(naming_prefix={"PrivateMember": "m_"},
-                      clang_tidy_config=str(project.path / "nope"))
-        assert naming_meta.problems(config)
 
 
 class TestHeaderFilterShape:

@@ -47,6 +47,11 @@ FROZEN = [
     ROOT / "cxx_ci",
 ]
 
+# ---------------------------------------------------------------- 代码守卫
+BOUNDARY_DIRS = [ROOT / "Source" / "NumberNaze"]
+DETAIL_DIRS = []
+DETAIL_MARK = "detail::"
+
 
 # ---- 编译数据库与分析
 
@@ -88,17 +93,6 @@ NAMING_PREFIX = {
     "LocalConstant": "_",
     "Parameter": "v_",
 }
-
-# 局部名禁止以 g_/m_/s_/t_/v_ 开头：这些前缀各有归属，
-# 局部变量再借用会让"看名字就知道是什么"失效。
-NAMING_LOCAL_BAN = "gmstv"
-
-# 类内静态数据成员被 clang-tidy 归为 GlobalVariable（不是 StaticVariable），
-# 按其识别结果处理，不为此放宽口径。
-NAMING_EXEMPT_KEYS = ["MacroDefinitionCase"]
-
-# 局部规则成立的前提项。
-NAMING_PREMISE_TRUE = ["IgnoreMacros"]
 
 # 前缀中间态交换表：无 m_ 迁到 t_ 这类需求，留空。
 NAMING_FIX_PREFIX_SWAPS = []

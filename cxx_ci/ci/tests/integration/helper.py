@@ -14,7 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 # 会被被测脚本调用的阶段脚本，测试可随意覆写
-STAGE_NAMES = ("boundary", "clean", "build", "build_test", "run_test",
+STAGE_NAMES = ("clean", "build", "build_test", "run_test",
                "memcheck")
 
 # 沙箱用的合法配置，其中 ROOT 指向沙箱自身。

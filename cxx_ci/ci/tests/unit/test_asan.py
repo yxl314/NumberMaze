@@ -49,9 +49,11 @@ BUILD_FILES = {
     "cmake": ("CMakeLists.txt", "CMakeLists.txt"),
 }
 
-# qtest 版逐例失败行；asis 通道的判定只看适配器解析出的用例名
+# regex 版逐例失败行；asis 通道的判定只看适配器解析出的用例名
 QT_FAIL = "FAIL!  : {} Compared values are not the same\n"
 QT_TOTALS = "Totals: 0 passed, 1 failed, 0 skipped\n"
+REGEX_CONFIG = ('TEST_REPORT_ADAPTER = "regex"\n'
+                'TEST_FAIL_PATTERN = r"^FAIL!\\s+:\\s*(?P<case>\\S+)"\n')
 
 # 一段真实的 asan 报告：指纹与定位行都在
 ASAN_REPORT = (
@@ -299,7 +301,7 @@ class TestMemoryFingerprintBeatsXfail:
     """指纹优先于登记：业务失败可豁免，内存错误永远不可。"""
 
     def judge(self, text, *cases, **kwargs):
-        config, root = configured('TEST_REPORT_ADAPTER = "qtest"\n')
+        config, root = configured(REGEX_CONFIG)
         status = kwargs.get("status", 1)
         return asan.judge(config, checklist(*cases), text, status)
 
@@ -331,7 +333,7 @@ class TestMemoryFingerprintBeatsXfail:
 
 class TestFailuresMustBeASubset:
     def test_unregistered_failure_is_reported(self):
-        config, root = configured('TEST_REPORT_ADAPTER = "qtest"\n')
+        config, root = configured(REGEX_CONFIG)
         text = (QT_FAIL.format("Case::known()")
                 + QT_FAIL.format("Case::fresh()") + QT_TOTALS)
         result = asan.judge(config, checklist("Case::known()"), text, 1)
@@ -340,7 +342,7 @@ class TestFailuresMustBeASubset:
         assert ["Case::known()"] == [item.case for item in result.known]
 
     def test_every_registered_failure_passes(self):
-        config, root = configured('TEST_REPORT_ADAPTER = "qtest"\n')
+        config, root = configured(REGEX_CONFIG)
         text = (QT_FAIL.format("Case::one()") + QT_FAIL.format("Case::two()")
                 + QT_TOTALS)
         result = asan.judge(config, checklist("Case::one()", "Case::two()"),

@@ -38,12 +38,9 @@ def env_for(config):
     return tools.child_env(overrides)
 
 
-def ignore_prefixes(config):
-    """忽略前缀：系统库无条件并入，其余按需自省。"""
-    prefixes = list(valgrind.SYSTEM_PREFIXES)
-    if config.auto_ignore_roots:
-        prefixes += valgrind.auto_ignore_prefixes(config.build_dir)
-    return prefixes
+def ignore_prefixes():
+    """忽略前缀：固定系统库目录。"""
+    return list(valgrind.SYSTEM_PREFIXES)
 
 
 def project_roots(config):
@@ -66,7 +63,7 @@ def attribute_report(config, report):
     roots = project_roots(config)
     return [valgrind.attribute(
         item, roots, config.memcheck_ignore_objects,
-        ignore_prefixes(config), outside, config.memcheck_ignore_symbols)
+        ignore_prefixes(), outside, config.memcheck_ignore_symbols)
         for item in report]
 
 

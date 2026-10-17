@@ -107,6 +107,7 @@ GOLDEN_JSON = """\
           "line": 3,
           "message": "未使用变量 [-Wunused-variable]",
           "owner": "project",
+          "path": "src/a.cpp",
           "xfail": false
         }
       ],
@@ -128,79 +129,11 @@ GOLDEN_JSON = """\
 }
 """
 
-GOLDEN_JUNIT = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="cxx_ci" tests="1" failures="0" skipped="0" time="1.500">
-  <testsuite name="build" tests="1" failures="0" skipped="0" time="1.500">
-    <testcase name="build" classname="cxx_ci"/>
-    <system-out>编译完成 | 1 条诊断</system-out>
-  </testsuite>
-</testsuites>
-"""
-
-GOLDEN_SARIF = """\
-{
-  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
-  "runs": [
-    {
-      "properties": {
-        "contract": 3,
-        "report_version": 1
-      },
-      "results": [
-        {
-          "level": "warning",
-          "locations": [
-            {
-              "physicalLocation": {
-                "artifactLocation": {
-                  "uri": "/proj/src/a.cpp"
-                },
-                "region": {
-                  "startColumn": 1,
-                  "startLine": 3
-                }
-              }
-            }
-          ],
-          "message": {
-            "text": "未使用变量 [-Wunused-variable]"
-          },
-          "partialFingerprints": {
-            "cxx_ci/v1": "5d64ddfb96212c5dcba42da31f0647d2866da413df98267edb3aa6de0e779df6"
-          },
-          "properties": {
-            "count": 1,
-            "owner": "project"
-          },
-          "ruleId": "-Wunused-variable"
-        }
-      ],
-      "tool": {
-        "driver": {
-          "informationUri": "",
-          "name": "cxx_ci",
-          "version": "1.3.0"
-        }
-      }
-    }
-  ],
-  "version": "2.1.0"
-}
-"""
-
-
 class TestGolden:
-    """一个阶段结果 → 三种格式的黄金文件断言。"""
+    """一个阶段结果 → JSON 的黄金文件断言。"""
 
     def test_json(self):
         assert GOLDEN_JSON == report.to_json(golden_doc())
-
-    def test_junit(self):
-        assert GOLDEN_JUNIT == report.to_junit(golden_doc())
-
-    def test_sarif(self):
-        assert GOLDEN_SARIF == report.to_sarif(golden_doc())
 
 
 class TestStatus:
@@ -221,8 +154,6 @@ class TestStatus:
         stage_entry = document["stages"][0]
         assert "skipped" == stage_entry["status"]
         assert "机器上没有 valgrind" == stage_entry["skipped_reason"]
-        xml = report.to_junit(document)
-        assert "<skipped message=\"机器上没有 valgrind\"/>" in xml
 
     def test_timeout_is_failed(self):
         document = report.build(
@@ -258,11 +189,6 @@ class TestXfail:
         failures = document["stages"][0]["failures"]
         assert [("A.b", True), ("C.d", False)] == [
             (item["case"], item["xfail"]) for item in failures]
-        xml = report.to_junit(document)
-        # 已登记项走 <skipped>，未登记项才是 <failure>
-        assert "已登记 (xfail)" in xml
-        assert xml.count("<failure") == 1
-        assert xml.count("<skipped") == 1
 
     def test_report_does_not_reclassify_a_fail_by_itself(self, tmp_path):
         """清单里有 A.b，但阶段只发了 #fail——报告**不得**自己把它改判成已知。
@@ -320,8 +246,6 @@ class TestDiagnostics:
         entry = document["stages"][0]["diagnostics"][0]
         assert "modernize-use-nullptr" == entry["check"]
         assert "project" == entry["owner"]
-        sarif = report.to_sarif(document)
-        assert "\"ruleId\": \"modernize-use-nullptr\"" in sarif
 
 
 class TestWrite:
@@ -333,15 +257,6 @@ class TestWrite:
         assert target.endswith(".json")
         with open(target, encoding="utf-8") as handle:
             assert GOLDEN_JSON == handle.read()
-
-    def test_multiple_formats_get_suffixes(self, tmp_path):
-        target = str(tmp_path / "report")
-        written, problems = report.write(golden_doc(), target,
-                                         ["json", "junit", "sarif"])
-        assert [] == problems
-        assert (str(tmp_path / "report.json"),
-                str(tmp_path / "report.xml"),
-                str(tmp_path / "report.sarif")) == tuple(written)
 
     def test_write_failure_is_a_problem_not_a_crash(self, tmp_path):
         """目录建不出来时只回问题，不改判定——报告是旁路产物。"""

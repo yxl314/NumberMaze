@@ -45,13 +45,35 @@ except ImportError as exc:  # pragma: no cover - 只在装坏时走到
     raise SystemExit(2)
 
 
+def _positional(args):
+    """argv 里的位置参数（跳过选项，以及形如 --x v 的选项取值）。"""
+    found = []
+    index = 0
+    while index < len(args):
+        item = args[index]
+        if item.startswith("-"):
+            if "=" not in item and index + 1 < len(args) \
+                    and not args[index + 1].startswith("-"):
+                index += 2
+                continue
+            index += 1
+            continue
+        found.append(item)
+        index += 1
+    return found
+
+
 def entrypoint(argv=None):
     """缺省动作取 all：不带动作就是"三件事都跑一遍"。"""
     args = list(sys.argv[1:] if argv is None else argv)
+    # 只认**位置参数**里的动作名。按"任意位置出现动作名"来判时，某个选项的
+    # **取值**恰好等于动作名（`--paths check`、`--exclude format`）就会让包装
+    # 脚本以为动作已经给了，于是不插 all，最后报"必须给出动作"
+    positional = _positional(args)
     # 动作表从 CLI 取，不在这里另写一份：漏一个动作的后果是"把动作当成没给"，
     # 由包装脚本插一个 all，最后由 argparse 报 unrecognized arguments——报错
     # 位置离原因很远（doctor 加进来时就踩过）
-    if not any(item in KNOWN_ACTIONS for item in args) and not any(
+    if not any(item in KNOWN_ACTIONS for item in positional) and not any(
             item in ("-h", "--help", "--version") for item in args):
         args.insert(0, "all")
     # Ctrl-C 要给人话与一个明确的退出码，而不是一段 Python 栈：这个脚本与装出来的

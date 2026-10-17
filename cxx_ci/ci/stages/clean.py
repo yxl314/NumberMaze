@@ -14,7 +14,7 @@ import sys
 sys.path.insert(0, os.path.dirname(
     os.path.dirname(os.path.abspath(__file__))))
 
-from lib import cli, errors, output, paths
+from lib import platform, cli, errors, output, paths
 
 
 
@@ -64,11 +64,21 @@ def remove_contents(target, keep=(), frozen=()):
 
 
 def kept_names(config, target):
-    """构建目录里要保留下来的子项名。"""
-    keep = []
-    log_dir = config.log_dir or ""
-    if log_dir and os.path.dirname(log_dir) == target:
-        keep.append(os.path.basename(log_dir))
+    """构建目录里要保留下来的子项名。
+
+    日志目录可以配在构建树的**任意深度**（CI_LOG_DIR 是一项自由配置），只保留
+    "恰好是直接子项"那一种布局时，别的布局整棵日志树会被清掉：诊断证据没了，
+    摘要里给出的日志路径变成死链，连互斥锁文件一起被删——锁挂在已 unlink 的
+    inode 上，互斥名存实亡。
+    """
+    keep = [platform.LOCK_NAME]
+    log_dir = os.path.abspath(config.log_dir or "")
+    target_abs = os.path.abspath(target)
+    if log_dir and paths.is_within(log_dir, target_abs):
+        relative = os.path.relpath(log_dir, target_abs)
+        head = relative.split(os.sep)[0]
+        if head and head != os.curdir:
+            keep.append(head)
     return tuple(keep)
 
 

@@ -8,9 +8,10 @@
 判定不出就跳过并让退出码非零；CRLF 文件跑完仍是 CRLF。
 
 与 ci/tests/unit/test_source.py 是同一份回归的两侧平行实现——两个项目互不
-import，一致性靠这两份测试各自钉住（对照见 tools/parity）。
+import，一致性靠这两份测试各自钉住。
 """
 
+from cxx_standardize import source
 from std_support import Project
 
 # 假的 clang-format：问版本时报 17.x；给内容时把连续空格压成一个。
@@ -111,3 +112,52 @@ def test_bom_is_kept_exactly_once(project):
     payload, message = source.encode_source(text, info)
     assert payload is not None, message
     assert original == payload
+
+class TestRoundTripEdgeCases:
+    """编码/换行往返的边界：逐项还原是契约承诺（CONTRACT.md 的"编码、换行符、
+    BOM、文件末尾换行逐项还原"）。
+    """
+
+    def _round_trip(self, tmp_path, name, data):
+        target = tmp_path / name
+        handle = open(str(target), "wb")
+        try:
+            handle.write(data)
+        finally:
+            handle.close()
+        text, info = source.read_source(str(target), None)
+        if text is None:
+            return None, info
+        source.write_source(str(target), text, info)
+        handle = open(str(target), "rb")
+        try:
+            return handle.read(), info
+        finally:
+            handle.close()
+
+    def test_an_empty_file_stays_empty(self, tmp_path):
+        """空文件按原始字节判"有结尾换行"，写回时凭空补一个 \n。"""
+        after, _info = self._round_trip(tmp_path, "a.cpp", b"")
+        assert b"" == after, after
+
+    def test_a_file_without_a_final_newline_keeps_it_that_way(self, tmp_path):
+        after, _info = self._round_trip(tmp_path, "b.cpp", b"int a=1;")
+        assert b"int a=1;" == after, after
+
+    def test_crlf_without_a_final_newline_leaves_no_stray_cr(self, tmp_path):
+        """删结尾换行只删一个字符时，CRLF 会在尾巴上留下一个孤立的 \r。"""
+        original = b"int a=1;\r\nint b=2;"
+        after, _info = self._round_trip(tmp_path, "c.cpp", original)
+        assert original == after, after
+
+    def test_a_bom_less_utf16_file_is_left_alone(self, tmp_path):
+        """NUL 是合法 UTF-8，无 BOM 的 UTF-16 会被"顺利"解出来然后按 UTF-8 改坏。"""
+        original = "int a=1;\n".encode("utf-16-le")
+        after, info = self._round_trip(tmp_path, "d.cpp", original)
+        assert after is None, after
+        assert "UTF-16" in info.reason, info.reason
+
+    def test_a_utf16_file_with_bom_round_trips(self, tmp_path):
+        original = b"\xff\xfe" + "int a=1;\n".encode("utf-16-le")
+        after, _info = self._round_trip(tmp_path, "e.cpp", original)
+        assert original == after, after

@@ -44,5 +44,6 @@ fi
 # 配置声明的 CONTRACT_VERSION 与本工具实现比对，不一致就直接退 2。编排脚本因此
 # 退化为纯编排，不再读任一侧的内部模块。
 cxx-standardize --config "$standardize_config" check
+cxx-standardize --config "$standardize_config" guard
 
 echo "全部通过"

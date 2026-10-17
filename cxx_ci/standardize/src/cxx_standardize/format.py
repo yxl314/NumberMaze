@@ -1,13 +1,12 @@
 """clang-format 排版。
 
-排版不触碰注释：注释先换成占位符交给 clang-format，排版后按原列号还原；代码
-越过原列时注释退一格。clang-format 没有**保列号**的等价能力——
-`AlignTrailingComments: true`（默认）会把手工对齐的行尾注释全部重排到最长代码
-行，`false` 更糟（全部塌成一个空格），`{Kind: Leave}` 保的是间隔而不是列号。
+排版不触碰注释：先摘掉注释排代码，再按代码行把注释回填；注释文本与代码到
+注释的间距原样保留。clang-format 没有**保列号**的等价能力——
+`AlignTrailingComments: true`（默认）会把手工对齐的行尾注释全部重排，`false`
+更糟（全部塌成一个空格）。因此这一层由本工具做。
 
-排版结果必须可复现：同一份输入连跑两次结果不一致说明基线不成立，拒绝应用。
-基线指纹（工具版本 + 注释模式 + 配置内容摘要）变化时要求重新确认，而不是把
-差异当成代码问题。
+排版结果必须可复现：基线指纹（工具版本 + 注释模式 + 配置内容摘要）变化时要求
+重新确认，而不是把差异当成代码问题。
 """
 
 import difflib
@@ -19,13 +18,9 @@ from .errors import Code
 from . import source as source_mod
 from .style import ALL_SUFFIXES, collect_files, incremental_files
 
-# 一次性切换用的排版模式：protect-column 的拒绝正是这次切换要解决的问题，
-# 因此切换本身按注释允许移动的模式来排
-ACCEPT_MODE = "placeholder"
-
 GUIDANCE = ("若这是首次接入：`format`（不带 --apply）只看漂移不改文件；"
-            "`format --accept-baseline --yes` 按注释允许移动的模式一次性重排并"
-            "记下基线；`standardize.py --apply` 则把排版、风格、命名一次修完，"
+            "`format --accept-baseline --yes` 一次性重排并记下基线；"
+            "`standardize.py --apply` 则把排版、风格、命名一次修完，"
             "并在没有基线时顺手把当前排版记成基线")
 
 
@@ -39,58 +34,38 @@ class Prepared:
     files: list[Path]
 
 
-def format_once(binary, style, path, source, mode, moved=None, broken=None):
+def format_once(binary, style, path, source, protect=True):
     """按给定模式排版一次，返回 (结果文本, 错误码, 说明)。
 
-    none 完全信任 .clang-format；placeholder 与 protect-column 都先把注释换成
-    占位符，区别在于后者把"注释列号变了"视为基线漂移。
+    protect 为假时完全信任 .clang-format；为真时先摘掉注释排代码，再按代码行
+    把注释回填。
     """
-    if mode == "none":
+    if not protect:
         return fmt.format_text(binary, style, path, source)
-    found = comments.scan_comments(source)
-    prefix = comments.marker_for(source, 0)
-    text, code, message = fmt.format_text(
-        binary, style, path, comments.strip_comments(source, prefix))
+    code_text, found = comments.split(source)
+    formatted_code, code, message = fmt.format_text(binary, style, path,
+                                                    code_text)
     if code != Code.OK:
         return None, code, message
-    restored = comments.restore_comments(text, found, prefix, moved, broken)
-    if broken:
-        # 行注释后面挂上了代码 = 把代码变成了注释的一部分。这种产物能编译但
-        # 语义已经变了，必须报错而不是写盘
+    formatted_code = comments.drop_namespace_comments(formatted_code)
+    restored, unplaced = comments.restore_comments(formatted_code, found,
+                                                   code_text)
+    if unplaced:
         return None, Code.COMMENT_RESTORE_FAILED, (
-            "注释还原失败：第 {} 行的行尾注释后面还有代码；"
-            "请把该处注释单独成行，或改 FORMAT_COMMENTS=none".format(
-                "、".join(str(item[1]) for item in broken[:3])))
+            "注释回填失败：{} 条注释找不到对应代码行；"
+            "请改 FORMAT_COMMENTS=none 或调整代码".format(len(unplaced)))
     return restored, Code.OK, ""
 
 
-def formatted(binary, style, path, mode="placeholder", config=None):
-    """返回排版后的字节，失败返回 (None, 错误码, 说明)。
-
-    幂等自检比的是**剥掉注释后那份文本**的两次 clang-format 结果——它度量的是
-    "clang-format 本身稳不稳定"，这正是基线机制成立的前提。比"还原注释后的产物"
-    是量错了对象：那里面还叠着自家的还原步骤，还原一有偏差就被判成"基线不可
-    复现"，而真正的还原错误该由 format_once 的结构不变量（行注释后面不得再有
-    代码）来报。量错对象的代价很直接：一个"初始化列表 + 行尾注释 + 独立左括号"
-    的普通文件会被永久拒绝，连 --accept-baseline 都进不去。
-    """
+def formatted(binary, style, path, protect=True, config=None):
+    """返回排版后的字节，失败返回 (None, 错误码, 说明)。"""
     config = config or _fallback_config()
     source, info, code, message = _read(path, config)
     if source is None:
         return None, code, message
-    moved: list = []
-    broken: list = []
-    if mode != "none":
-        if not _stable(binary, style, path, source):
-            return None, Code.FORMAT_UNSTABLE, (
-                f"排版结果不稳定，再跑一次仍会变化，拒绝应用: {path}")
-    once, code, message = format_once(binary, style, path, source, mode, moved,
-                                      broken)
+    once, code, message = format_once(binary, style, path, source, protect)
     if code != Code.OK:
         return None, code, message
-    if mode == "protect-column" and moved:
-        return None, Code.BASELINE_REJECTED, (
-            f"{len(moved)} 处行尾注释列号发生变化，注释优先的基线不成立")
     # 按原编码与版式写回：编码、换行、BOM 全程不动。这一步是"工具不会吃掉
     # 用户代码"的落点，绝不能再用裸的 encode("utf-8")
     payload, message = source_mod.encode_source(once, info)
@@ -119,19 +94,6 @@ class _Fallback:
 
 def _fallback_config():
     return _Fallback()
-
-
-def _stable(binary, style, path, source):
-    """clang-format 对"剥掉注释后的文本"是否幂等。"""
-    prefix = comments.marker_for(source, 0)
-    peeled = comments.strip_comments(source, prefix)
-    once, code, _message = fmt.format_text(binary, style, path, peeled)
-    if code != Code.OK:
-        return False
-    again, code, _message = fmt.format_text(binary, style, path, once)
-    if code != Code.OK:
-        return False
-    return again == once
 
 
 def diff_text(path, before, after):
@@ -164,17 +126,16 @@ def prepare(config, options, tools):
     return Prepared(style, config_file, current, files), Code.OK, ""
 
 
-def _scan(binary, style, files, mode, jobs, config):
+def _scan(binary, style, files, protect, jobs, config):
     """并行排版一批文件，按输入顺序返回 (路径, 原始, 结果, 错误码, 说明)。
 
-    排版是"起子进程再等"的活，串行跑会让 --jobs 空转；每个文件还要跑两遍
-    clang-format（幂等自检）加一次去注释/还原，文件一多就是主要耗时。
+    排版是"起子进程再等"的活，串行跑会让 --jobs 空转。
     """
     from concurrent.futures import ThreadPoolExecutor
 
     def one(path):
         before = Path(path).read_bytes()
-        after, code, message = formatted(binary, style, path, mode, config)
+        after, code, message = formatted(binary, style, path, protect, config)
         return path, before, after, code, message
 
     items = list(files)
@@ -204,25 +165,22 @@ def check(config, options, tools, report=None):
         log.err(message)
         return code
 
-    # 首次应用（还没有基线）用"注释允许移动"的模式：protect-column 是拿**既有**
-    # 列位置当基准的，没有基线时这个基准并不存在，硬用会把"某一处行尾注释放不回
-    # 原列"的文件整个拒掉，接入流程就断在第一次 --apply 上。排完之后记下基线，
-    # 从下一次起才按 protect-column 守
-    mode = config.format_comments
-    if options.apply and record is None:
-        mode = ACCEPT_MODE
-        log.out("还没有排版基线，首次应用按注释允许移动的模式重排")
+    protect = config.format_comments != comments.OFF
     results = _scan(tools.clang_format, prepared.style, prepared.files,
-                    mode, _jobs(config, options), config)
+                    protect, _jobs(config, options), config)
     changed = 0
     changed_paths = []
     problems = []
+    skipped = []
     for path, before, after, rcode, rmessage in results:
         if after is None:
-            log.err(rmessage)
-            if rcode == Code.BASELINE_REJECTED:
-                log.out(GUIDANCE)
-            return rcode
+            # 编码判定不出的文件只读跳过，**不能**中断整个阶段：契约写的是
+            # "该文件只读，检查照报、改写跳过并说明原因，退出码按有文件未完成计"。
+            # 一遇到它就 return 会让后面的文件一个都不处理，留下一棵"写了一半"
+            # 的树，而使用者看到的是整轮失败
+            log.err("{}: {}".format(path, rmessage))
+            skipped.append((path, rmessage))
+            continue
         if after == before:
             continue
         changed += 1
@@ -241,6 +199,11 @@ def check(config, options, tools, report=None):
             log.out(f"已排版 {path}")
         else:
             log.out(diff_text(path, before, after).rstrip())
+    if skipped:
+        log.err("{} 个文件编码判定不出，保持只读（见上）".format(len(skipped)))
+        for path, _reason in skipped:
+            if stage is not None:
+                stage.add_failure(str(path), "编码判定不出，未改写")
     if problems:
         log.err("{} 个文件没能写入（见上）".format(len(problems)))
     if options.apply:
@@ -259,8 +222,9 @@ def check(config, options, tools, report=None):
             stage.summary = f"已排版 {changed - len(problems)} 个文件"
             for path in problems:
                 stage.add_failure(str(path), "没能写入（见上）")
-        if problems:
-            # 有文件没能写入时不能报成功：它就还没排版，下一次照样会判红
+        if problems or skipped:
+            # 有文件没写成、或根本没改写时不能报成功：它们就还没排版，
+            # 下一次照样会判红
             return Code.FORMAT_PENDING
         return Code.OK
     if changed:
@@ -278,13 +242,13 @@ def check(config, options, tools, report=None):
     return Code.OK
 
 
-def drift(binary, style, files, mode, jobs, config):
+def drift(binary, style, files, protect, jobs, config):
     """一次性切换会影响哪些文件，返回 ([(路径, 结果, 差异)], 错误码, 说明)。
 
     连结果一起返回：调用方接着就要写这些字节，再排一次纯属重复劳动。
     """
     changed = []
-    for path, before, after, code, message in _scan(binary, style, files, mode,
+    for path, before, after, code, message in _scan(binary, style, files, protect,
                                                     jobs, config):
         if after is None:
             return None, code, message
@@ -304,15 +268,15 @@ def accept_baseline(config, options, tools, yes=False, report=None):
         log.out("没有需要排版的文件")
         return Code.OK
     changed, code, message = drift(tools.clang_format, prepared.style,
-                                   prepared.files, ACCEPT_MODE,
+                                   prepared.files,
+                                   config.format_comments != comments.OFF,
                                    _jobs(config, options), config)
     if code != Code.OK:
         log.err(message)
         return code
     if stage is not None:
         stage.summary = f"一次性重排 {len(changed)} 个文件"
-    log.out(f"一次性切换将以 {ACCEPT_MODE} 模式重排 {len(changed)} 个文件，"
-            f"行尾注释可能移动列")
+    log.out(f"一次性切换将重排 {len(changed)} 个文件，注释原样保留")
     if changed:
         log.out(f"示例差异（其余 {len(changed) - 1} 个同类）:")
         log.out(changed[0][2].rstrip())
@@ -327,6 +291,12 @@ def accept_baseline(config, options, tools, yes=False, report=None):
             stage.add_failure(str(path), "一次性重排")
     written = 0
     for path, after, _ in changed:
+        # 一次性重排同样是"改写用户源码"，要过同一套范围判定：这条入口以前没有
+        # 任何检查，写穿软链改到工程外、改写禁改区都照做
+        hit, why = paths.write_blocked(config, path)
+        if hit:
+            log.err(f"拒绝改写 {path}（{why}）")
+            return None
         code, message = source_mod.write_bytes(path, after)
         if code != Code.OK:
             log.err(message)

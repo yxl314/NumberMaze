@@ -36,12 +36,10 @@ _LEVELS = {
 }
 
 
-# 命名改名一律人工。clang-tidy 17 的 identifier-naming 没有 FixIt 开关（实测
-# 每个 kind 只有 Case/Prefix/Suffix/IgnoredRegexp），-fix 只要产出 fix-it 就会
-# 执行改名，而且只对违规名盲目前缀叠加、从不脱前缀（v_foo → _v_foo、
-# g_x → s_g_x 这类垃圾）。更麻烦的是声明与定义分处头文件与源文件：改名只落在
-# 被分析的那一个 TU 里，实测把能编译的工程改成编译不过。因此风格修复整体关掉
-# 本检查，命名由人工处理。
+# clang-tidy 17 的 identifier-naming 只能"把配置里的 Prefix 拼上去"，从不脱前缀，
+# 直接应用它的 fix-it 会得到 v_foo → _v_foo、g_x → s_g_x 这类叠加的垃圾名。因此
+# --apply 时保留本检查以拿到**每个违规的位置**，替换文本改由 prefix.retarget 按
+# 口径表重算（位置取自 clang-tidy，文本由本工具算）。
 NAMING_CHECK = "readability-identifier-naming"
 
 # 局部四类：规范要求裸名（`_` 前缀只是"临时值"惯例，人为维护），因此自动修复

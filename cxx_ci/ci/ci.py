@@ -17,10 +17,9 @@
 阶段的执行、落盘与展示都在 common/stage.py 里，standardize.py 走同一份
 实现——两个入口各写一套展示，行为必然分叉。
 
-子命令 `init` 探测当前工程并生成带依据注释的配置，不需要已有配置；子命令
-`doctor` 只读自检，回答"现在生效的是什么、上次为什么红、下一步跑什么"；
+子命令 `doctor` 只读自检，回答"现在生效的是什么、上次为什么红、下一步跑什么"；
 `--help-config` 由配置元数据生成，列出每一项的语义、推导规则与改动时机。
-这三个都出自 lib/config.py 的同一张元数据表，文档因此不会与实现分叉。
+两者都出自 lib/config.py 的同一张元数据表，文档因此不会与实现分叉。
 
 共享参数见 lib/。
 """
@@ -37,14 +36,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-from lib import (audit, cli, config as config_module, doctor,  # noqa: E402
-                 migrate, platform, probe)
+from lib import (cli, config as config_module, doctor,  # noqa: E402
+                 platform)
+from lib import diagnostics as diagnostics_module  # noqa: E402
 from lib import report as report_module  # noqa: E402
 from lib import errors, output, stage, version  # noqa: E402
 
 # 基础流程。风格与排版属于另一个项目，见仓库根的 CONTRACT.md。
-STAGES = ("boundary", "clean", "build", "build_test", "run_test",
-          "memcheck")
+STAGES = ("clean", "build", "build_test", "run_test", "memcheck")
 
 
 def split_names(value):
@@ -91,11 +90,14 @@ def report(records, quiet, skipped=()):
     output.out("总计 {:.1f}s".format(sum(result.elapsed for result in records)))
 
 
-def publish_report(config, args, records, skipped):
+def publish_report(config, args, records, skipped, code=errors.OK, detail=""):
     """写机器可读报告。
 
     报告是旁路产物：它的结论与终端同源（同一份 stage_view），写报告自身失败
     （目录不可写、格式非法）只降级为警告，绝不改变门禁结论与退出码。
+
+    整体结论（code/detail）由入口给：报告不自己判卷，但必须把入口的判定带出去。
+    少了它，"一段都没跑就失败"在平台眼里是 tests=0 failures=0——零失败。
     """
     if not args.report:
         return
@@ -103,8 +105,7 @@ def publish_report(config, args, records, skipped):
     # 路径只收一个。与其照着这个路径造出一个名字里带逗号的目录，不如当场说清
     if args.report != "-" and "," in args.report:
         output.err("--report 只收一个路径，不接受逗号分隔: {}"
-                   "（多个格式请用 --report-format json,junit 逗号并列，"
-                   "文件会按格式自动加后缀）".format(args.report))
+                   .format(args.report))
         return
     formats = split_names(args.report_format) or ["json"]
     unknown = [name for name in formats if name not in report_module.FORMATS]
@@ -113,7 +114,9 @@ def publish_report(config, args, records, skipped):
                    + "（可用: " + "、".join(report_module.FORMATS) + "）")
         return
     try:
-        document = report_module.build(config, records, skipped)
+        document = report_module.build(
+            config, records, skipped,
+            conclusion=report_module.conclusion_of(code, detail))
         written, problems = report_module.write(document, args.report, formats)
     except (IOError, OSError, ValueError, TypeError) as exc:
         output.err("生成报告失败（不影响判定）: {}".format(exc))
@@ -123,56 +126,6 @@ def publish_report(config, args, records, skipped):
     for path in written:
         if path != "<stdout>":
             output.out("报告已写入: " + path)
-
-
-INIT_OUTPUT = "config/ci.py"
-
-
-def init_main(argv):
-    """探测当前工程并生成带依据注释的配置。
-
-    不需要已有配置——它正是用来产生配置的，因此与 --version 一样在加载配置
-    之前短路（见 main）。探测只列候选、不猜：多份候选留成 TODO 由人定。
-    """
-    parser = argparse.ArgumentParser(
-        prog="ci.py init",
-        description="探测当前工程并生成带依据注释的项目配置")
-    parser.add_argument("--project-root", default="",
-                        help="被 CI 的项目根，缺省为当前目录")
-    parser.add_argument("--out", default=INIT_OUTPUT,
-                        help="生成的配置位置，相对项目根，缺省 " + INIT_OUTPUT)
-    args = parser.parse_args(argv)
-    root = Path(args.project_root).resolve() if args.project_root else Path.cwd()
-    if not root.is_dir():
-        output.err("项目根不存在: " + str(root))
-        return errors.CONFIG_ROOT_MISSING
-    target = Path(args.out)
-    if not target.is_absolute():
-        target = root / target
-    if target.exists():
-        output.err("目标文件已存在，不覆盖: " + str(target)
-                   + "（请先移走它，或用 --out 指向别处）")
-        return errors.CONFIG_BAD_VALUE
-    plan = probe.probe(str(root))
-    directory = target.parent
-    if not directory.is_dir():
-        try:
-            os.makedirs(str(directory))
-        except OSError as exc:
-            output.err("无法创建目录 {}: {}".format(directory, exc))
-            return errors.CONFIG_BAD_VALUE
-    try:
-        handle = open(str(target), "w", encoding="utf-8")
-        try:
-            handle.write(probe.render(plan))
-        finally:
-            handle.close()
-    except (IOError, OSError) as exc:
-        output.err("写入配置失败 {}: {}".format(target, exc))
-        return errors.CONFIG_BAD_VALUE
-    for line in probe.summary(plan, target):
-        output.out(line)
-    return errors.OK
 
 
 def build_parser(config):
@@ -208,11 +161,6 @@ def build_parser(config):
         help="结束后不清理，保留构建产物",
     )
     parser.add_argument(
-        "--no-audit",
-        action="store_true",
-        help="跳过配置审计，仅调试用",
-    )
-    parser.add_argument(
         "--report",
         nargs="?",
         const="-",
@@ -223,7 +171,7 @@ def build_parser(config):
     parser.add_argument(
         "--report-format",
         default="json",
-        help="报告格式 json|junit|sarif，逗号分隔可并列（多格式写文件时按格式加后缀）",
+        help="报告格式，目前只有 json",
     )
     parser.add_argument(
         "--version",
@@ -231,28 +179,6 @@ def build_parser(config):
         help="打印版本与契约版本后退出（不需要配置）",
     )
     return parser
-
-
-def migrate_command(argv):
-    """migrate-config：把旧配置项改名，dry-run 打印 diff，落盘前写 .bak。"""
-    dry_run = "--dry-run" in argv
-    targets = [item for item in argv[1:]
-               if not item.startswith("-") and item != "migrate-config"]
-    if not targets:
-        targets = [str(config_module.CONFIG_FILE)]
-    code = errors.OK
-    for target in targets:
-        if not os.path.isfile(target):
-            output.err("找不到配置文件: " + target)
-            code = errors.CONFIG_NOT_FOUND
-            continue
-        found, text = migrate.migrate(target, dry_run=dry_run)
-        output.out(text)
-        # 需要人工复核（1）也要让退出码非 0：迁移只做了一半，脚本不该当成功。
-        # migrate 返回的是裸状态，必须过 from_status 补类型位，否则被折成 0
-        if found:
-            code = errors.from_status(found)
-    return code
 
 
 def main():
@@ -270,16 +196,15 @@ def main():
     if "--version" in argv:
         output.out(version.version_line())
         return errors.OK
-    # migrate-config 同样先于配置加载：要迁移的正是"配置本身"
-    if "migrate-config" in argv:
-        return migrate_command(argv)
     # --help-config 出自配置元数据，与是否已有配置无关，同样先短路
     if "--help-config" in argv:
         output.out(config_module.help_config_text().rstrip("\n"))
         return errors.OK
-    # init 同样要在配置加载之前：它正是用来产生配置的
-    if argv[:1] == ["init"]:
-        return init_main(argv[1:])
+    # --help/-h/--version 也先短路：它们问的是"这个工具怎么用"，与有没有配置
+    # 无关。放到配置加载之后时，一个还没接入的工程敲 --help 得到的是
+    # "找不到配置"（退出 2，含义是"缺外部依赖"），答非所问
+    if any(item in ("-h", "--help", "--version") for item in argv):
+        return cli.help_or_version(argv, build_parser)
     # doctor 自行载配置（配置建不起来时也要能报环境与原因），不在这里加载
     if argv[:1] == ["doctor"]:
         return doctor.main(argv[1:])
@@ -296,10 +221,11 @@ def main():
     # 互斥：两份门禁同时跑同一个工程会互相破坏——一份的 clean 清掉另一份正在用的
     # 构建树（随后 configure 失败，好工程判红），阶段日志被两份交替追加成"失败+
     # 成功"的混合文件，memcheck 的结构化报告也会被写成两份文档拼在一起
-    holder, why = platform.acquire_lock(getattr(config, "log_dir", ""))
+    holder, why = platform.acquire_lock(getattr(config, "build_dir", ""))
     if holder is None and why:
         output.err(why)
         return errors.ENV_BUSY
+    platform.install_term_handler()
     try:
         return run_stages(config, args)
     finally:
@@ -308,16 +234,6 @@ def main():
 
 def run_stages(config, args):
     """跑一轮门禁（互斥锁已由调用方持有时才会走到这里）。"""
-    # 配置审计先于任何阶段：纪律违规没必要再花构建时间，也防止"改了配置不生效"
-    # 被当成正常通过。--no-audit 只用于调试审计本身。
-    if not args.no_audit:
-        code, messages = audit.run(config)
-        if code != errors.OK:
-            for line in messages:
-                output.err(line)
-            publish_report(config, args, [], [])
-            return code
-
     # 高危项就地提醒：只打印、不判红，且只在会出声的级别下打印——quiet 的语义
     # 是"只在失败时出声"，提醒混进去会破坏这条契约
     if args.level != "quiet":
@@ -328,17 +244,19 @@ def run_stages(config, args):
                                    default_stages(config))
     if unknown:
         output.err("未知阶段: " + ", ".join(unknown))
-        publish_report(config, args, [], [])
+        publish_report(config, args, [], [], errors.UNKNOWN_STAGE,
+                       "未知阶段: " + ", ".join(unknown))
         return errors.UNKNOWN_STAGE
     if not stages:
-        # 筛完一个都不剩（例如 --only boundary --skip boundary）：什么都不做就
+        # 筛完一个都不剩（例如 --only build --skip build）：什么都不做就
         # 退出 0 等于告诉使用者"跑过了、没问题"，而实际上一段都没跑
         requested = args.only or list(default_stages(config))
         output.err("没有可执行的阶段: 选中 {} 个，被 --skip 排除了 {} 个"
                    "（选中: {}；跳过: {}）".format(
                        len(requested), len(args.skip),
                        "、".join(requested), "、".join(args.skip) or "无"))
-        publish_report(config, args, [], [])
+        publish_report(config, args, [], [], errors.CONFIG_BAD_VALUE,
+                       "没有可执行的阶段")
         return errors.CONFIG_BAD_VALUE
     # 末尾清理只在跑完整流程且全部通过后执行；中途失败会提前返回，产物得以保留
     if not args.only and not args.no_clean_after:
@@ -349,7 +267,17 @@ def run_stages(config, args):
     for name in stages:
         result = stage.run_stage(config, name, ROOT / "stages" / (name + ".py"), extra,
                                 args.level == "verbose", args.timeout)
-        stage.emit(config, result, args.level)
+        try:
+            stage.emit(config, result, args.level)
+        except diagnostics_module.SlowPattern:
+            # 配置里的忽略正则回溯爆炸。阶段本身可能已经跑完了，但结论没法
+            # 可信地归并——把它报成配置错误并停下，比挂在那里等人猜要好
+            output.err("DIAGNOSTIC_IGNORE 里有会回溯爆炸的正则：它没有在 "
+                       "{} 秒内跑完。请改写这条正则（避免 (a+)+ 这类嵌套量词）"
+                       "或去掉它".format(diagnostics_module.IGNORE_PATTERN_SECONDS))
+            publish_report(config, args, records, [], errors.CONFIG_BAD_VALUE,
+                           "DIAGNOSTIC_IGNORE 里的正则回溯爆炸")
+            return errors.CONFIG_BAD_VALUE
         records.append(result)
         if errors.kind(result.code) == errors.KIND_SKIPPED:
             # 机器上缺 clang 或编译数据库：标 skipped 并说明原因。
@@ -362,10 +290,11 @@ def run_stages(config, args):
         if result.code != 0:
             output.err("阶段 {} 未通过，产物保留以便排查".format(name))
             report(records, False)
-            publish_report(config, args, records, skipped)
+            publish_report(config, args, records, skipped, result.code,
+                           "阶段 {} 未通过".format(name))
             return result.code
     report(records, args.level == "quiet", skipped)
-    publish_report(config, args, records, skipped)
+    publish_report(config, args, records, skipped, errors.OK, "全部通过")
     return errors.OK
 
 

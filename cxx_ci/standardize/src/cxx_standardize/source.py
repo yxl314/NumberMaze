@@ -128,22 +128,35 @@ def read_source(path, config):
         info.reason = "无法读取: {}".format(exc)
         return None, info
     info.newline = _detect_newline(data)
-    info.had_final_newline = data.endswith(b"\n") or data == b""
+    # 末尾有没有换行要**解码之后**判：UTF-16LE 的换行是 0a 00，按原始字节判会
+    # 判成"没有"从而吞掉它；空文件按字节判又会判成"有"，于是写回时凭空补一个
+    # 换行（0 字节的文件变成 1 字节）。这里先占位，等文本解出来再定
+    info.had_final_newline = False
 
     marker, bom_encoding = _bom_of(data)
     if marker:
         info.bom, info.encoding, info.origin, info.known = (
             marker, bom_encoding, "bom", True)
         body = data[len(marker):]
-        return _decode(body, info)
+        text, info = _decode(body, info)
+        _settle_final_newline(text, info)
+        return text, info
 
     candidates, explicit = _candidates(config)
     info.explicit = explicit
     # 先严格试 UTF-8：绝大多数文件在这里就定了，也绝不冤枉一个合法的 UTF-8
     if not explicit or candidates and candidates[0] == "utf-8":
         text = _try(data, "utf-8", info)
+        if text is not None and "\x00" in text:
+            # NUL 是合法 UTF-8，所以纯 ASCII 内容的无 BOM UTF-16 能"顺利"解出来，
+            # 而它其实是每个字符夹一个 NUL 的另一种编码。源码里出现 NUL 只可能是
+            # 这个原因，认下它等于用 UTF-8 的规则去改 UTF-16 的字节
+            info.reason = ("解出来含 NUL 字节，像是无 BOM 的 UTF-16/UTF-32；"
+                           "请显式配 SOURCE_ENCODING（本工具不猜编码）")
+            return None, info
         if text is not None:
             info.origin = "utf-8"
+            _settle_final_newline(text, info)
             return text, info
         if explicit and candidates[0] == "utf-8":
             info.reason = ("不是合法 UTF-8，而 SOURCE_ENCODING 指定了 utf-8"
@@ -160,9 +173,15 @@ def read_source(path, config):
         text = _try(data, name, info)
         if text is not None:
             info.origin = "configured" if explicit else "candidate"
+            _settle_final_newline(text, info)
             return text, info
     info.reason = "候选编码都解不出: " + "、".join(candidates)
     return None, info
+
+
+def _settle_final_newline(text, info):
+    """按解出来的文本定"原文末尾有没有换行"。"""
+    info.had_final_newline = bool(text) and text.endswith(("\n", "\r"))
 
 
 def _try(data, encoding, info):
@@ -215,7 +234,10 @@ def encode_source(text, info):
     if info.had_final_newline and not body.endswith("\n"):
         body += info.newline
     elif not info.had_final_newline and body.endswith("\n"):
-        body = body[:-1]
+        # 按**整段**换行序列删：CRLF 是两个字符，只删一个会在文件尾巴上留下
+        # 一个孤立的 \r（原文没有结尾换行，写回后却多出一个控制字符）
+        body = body[:-len(info.newline)] if body.endswith(info.newline) \
+            else body[:-1]
     try:
         return info.bom + body.encode(_body_encoding(info.encoding),
                                       errors="strict"), ""
@@ -248,12 +270,35 @@ def write_bytes(path, payload):
     返回 (错误码, 说明)；失败时原文件一个字节都没动。
     """
     path = str(path)
-    directory = os.path.dirname(path) or "."
+    if os.path.islink(path):
+        # 工程内的软链（vendor/foo.h -> ../shared/foo.h）要用 os.replace 覆盖时，
+        # 软链本身会被换成一个普通文件：链接关系没了，而输出只报"已排版"。
+        # 写到真实落点，链接照旧——写盘范围判定本来就按 realpath 算，这里一致
+        path = os.path.realpath(path)
+    # 父目录先解析成真实路径：判定通过之后、改名之前把某一级换成软链，就能让
+    # 落点跑到工程外（TOCTOU）。在真实目录里建临时文件、也在那里改名，落点就
+    # 钉死在这一级，之后换软链也改不了它
+    directory = os.path.realpath(os.path.dirname(path) or ".")
+    path = os.path.join(directory, os.path.basename(path))
+    # 先取原文件的权限位：mkstemp 建的是 0600，直接改名覆盖会把 0664 的可写组、
+    # 0755 的可执行位一路抹掉——改写一个脚本会让它变得不可执行
+    mode = None
+    try:
+        mode = os.stat(path).st_mode & 0o7777
+    except (IOError, OSError):
+        # 新文件：没有"原来的权限"可言，用 mkstemp 的缺省再按 umask 放开
+        pass
     temporary = None
     try:
         handle, temporary = tempfile.mkstemp(prefix=".cxx-write-", dir=directory)
     except (IOError, OSError) as exc:
         return 2, "无法在 {} 下建临时文件: {}".format(directory, exc)
+    if mode is not None:
+        try:
+            os.chmod(temporary, mode)
+        except (IOError, OSError):
+            # 改不动权限（例如文件系统不支持）不算写失败，继续
+            pass
     try:
         try:
             # os.write 可能只写进去一部分（磁盘满、超过文件尺寸上限时就是），
