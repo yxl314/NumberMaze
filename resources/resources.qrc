@@ -1,0 +1,9 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/fonts">
+        <file alias="NotoSansCJKsc-Regular.otf">fonts/NotoSansCJKsc-Regular.otf</file>
+    </qresource>
+    <qresource prefix="/icons">
+        <file alias="number-maze.png">number-maze.png</file>
+    </qresource>
+</RCC>

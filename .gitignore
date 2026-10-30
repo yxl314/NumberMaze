@@ -1,68 +1,56 @@
-# Prerequisites
-*.d
-
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-*.so.*
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
-*.exe
-*.out
-*.app
-
-# Build directories
+# 构建产物
 build/
-Build/
 build-*/
-
-# CMake generated files
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
 Makefile
-install_manifest.txt
 compile_commands.json
+*.o
+*.a
+*.so
 
-# Temporary files
+# Qt 自动生成
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+*.autosave
+.qmake.stash
+
+# 编辑器与临时文件
+*.swp
 *.tmp
 *.log
-*.bak
-*.swp
+.vscode/
+.idea/
 
-# vcpkg
-vcpkg_installed/
+# Python 字节码缓存（若后续加入脚本）
+__pycache__/
+*.py[cod]
 
-# debug information files
-*.dwo
+# 验证产物
+build/screenshots/
+build/interaction/
 
-# test output & cache
-Testing/
-.cache/
+# 门禁产物
+build/ci-logs/
+ci.xfail
+
+# Qt Creator 本地配置
+.qtcreator/
+*.user
+
+# Doxygen 生成的文档
+docs/
+
+# Python 字节码缓存（工具链用 Python 写成）
+.pytest_cache/
+
+# 发行包与打包暂存目录
+dist/
+packaging/stage/
+*.run
+
+# 模型测试构建目录
+build-model/

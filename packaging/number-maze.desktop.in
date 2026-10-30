@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=数字迷宫
+Name[en]=Number Maze
+GenericName=数字滑块游戏
+Comment=基于特殊图连接拓扑的数字迷宫
+Comment[en]=A number sliding puzzle on a non-grid graph topology
+Exec="@EXEC@"
+TryExec=@EXEC@
+Icon=@ICON@
+Terminal=false
+Categories=Game;LogicGame;
+Keywords=game;puzzle;maze;数字;迷宫;
+StartupNotify=true
+StartupWMClass=number-maze

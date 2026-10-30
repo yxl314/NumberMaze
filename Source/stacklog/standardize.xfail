@@ -1,0 +1,6 @@
+# 由 cxx-standardize style --record 生成；只对新增违规判红
+[style]
+src/detail/context.cpp:bugprone-empty-catch
+src/detail/state.cpp:clang-analyzer-cplusplus.NewDeleteLeaks
+tests/test_lifecycle.cpp:performance-unnecessary-copy-initialization
+tests/test_span.cpp:bugprone-empty-catch
